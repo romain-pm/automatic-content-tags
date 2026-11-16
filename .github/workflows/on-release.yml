@@ -1,0 +1,21 @@
+# Runs when someone creates a release in GitHub and checks the box "Set as a pre-release": the
+# shared workflow releases the module with Maven and publishes it to the Jahia Nexus.
+name: Trigger Release creation
+
+on:
+  release:
+    types: [prereleased]
+
+permissions:
+  actions: read
+  checks: write
+  contents: read
+  id-token: write
+
+jobs:
+  release-module:
+    uses: Jahia/jahia-modules-action/.github/workflows/reusable-release-module.yml@v2
+    secrets: inherit
+    with:
+      skip_staging: true
+      job_container: "ghcr.io/jahia/jahia-docker-mvn-cache:17-jdk-noble-mvn-loaded"
