@@ -54,7 +54,7 @@ public interface AltTextService {
      * limit. A background job calls it for each image and each language.
      *
      * <p>Without {@code overwrite}, an image keeps its text, unless that text is the AI's own text, which no editor
-     * changed or marked as reviewed, and the image file changed since the AI wrote it. Each text written records its
+     * changed or marked as reviewed, and the picture sent to the model changed since. Each text written records its
      * provenance in the mixin {@code jmix:jahiaAltProvenance}.</p>
      *
      * @param image     the image, read through the calling user's session in the target locale

@@ -152,15 +152,24 @@ mutation {
 
 - The mutation lists the images, schedules the run and returns at once. It answers an error when
   genai-connector has no model for the tier `vision`.
-- Jahia background jobs write the texts as the calling user, 20 images per job. The server log reports
-  each job. For example, a folder of 500 images in English and French takes 25 jobs and 1,000 model
-  calls.
+- Jahia background jobs write the texts as the calling user. Jahia runs its persistent jobs,
+  publications included, on one thread. So each job makes no new model call after 20 seconds, and a
+  new job takes the images left. A publication requested meanwhile runs between two jobs.
+- The server log reports each job. For example, a folder of 500 images in English and French takes
+  1,000 model calls.
 - The jobs are stored in the database, so a run survives a restart. A job that a crash stopped runs
-  again, and it skips the images it already did.
+  again. Without `overwrite`, it skips the texts it already wrote. With `overwrite`, it writes them
+  again.
 - A run can meet the rate limit of genai-connector, or an AI provider that is still busy after the
   retries of genai-connector. The run then waits `alt.retry.delay.seconds` and goes on with the images
-  left. The delay doubles on each attempt that writes nothing, up to one hour. The run stops after 6
-  such attempts in a row.
+  left, from the image and the language that failed. The delay doubles on each attempt that writes
+  nothing, up to one hour. The run stops after 6 such attempts in a row.
+- A run spends the AI rate limit of its user on the node that runs the jobs: 60 calls in 10 minutes
+  by default. For example, a run of 1,000 calls keeps that user at the limit for almost 3 hours.
+- An image that a job cannot find gets one more try a minute later. In a cluster, the processing
+  node that runs the jobs can see an upload of another node a few seconds late.
+- A job that fires while genai-connector restarts waits and tries again. A job that fires while this
+  module is stopped is lost, because Jahia runs a job that does nothing in its place.
 
 The mutation `generateImageAltText(path, language, includeSubNodes, overwrite, resumeFrom)` stays for
 its existing callers. It writes the texts within the request, in one language, and returns one result
@@ -186,17 +195,17 @@ mutation {
 
 Each text that the module writes records its provenance in the mixin `jmix:jahiaAltProvenance`, in
 the language of the text. The provenance holds the model, the tier, the date and a reviewed flag. It
-also holds the SHA-256 digests of the text and of the image file. Without `overwrite`, the module
-applies these rules:
+also holds the SHA-256 digests of the text and of the picture that the model saw. Without
+`overwrite`, the module applies these rules:
 
 - An image with no text gets one.
 - A text that an editor wrote is kept.
 - An AI text that an editor changed is kept, because its digest no longer matches.
 - An AI text that an editor marked as reviewed is kept. The Content Editor shows the "Reviewed by an
   editor" checkbox of an image once the AI wrote its text.
-- Any other AI text is replaced when the image file changed since the AI wrote it. For example, an
+- Any other AI text is replaced when the picture changed since the AI wrote it. For example, an
   editor uploads a new photo as `team.jpg` over the old one, and the job writes a text for the new
-  photo.
+  photo. A change of `image.max.bytes` can change the picture sent too.
 - A text that an earlier 2.0.0 snapshot wrote has no provenance, so it is kept.
 
 #### At upload

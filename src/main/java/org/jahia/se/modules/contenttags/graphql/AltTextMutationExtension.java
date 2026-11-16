@@ -45,7 +45,7 @@ public final class AltTextMutationExtension {
     @GraphQLField
     @GraphQLName("scheduleImageAltText")
     @GraphQLDescription("Schedules the alternative text of an image, or of the images below a node, in Jahia "
-            + "background jobs, and returns at once. The jobs run as the current user, in batches of 20 images, survive "
+            + "background jobs, and returns at once. The jobs run as the current user, about 20 seconds each, survive "
             + "a restart, and wait and go on when the AI provider is busy or the AI rate limit is reached. Each text is "
             + "saved in the configured property (by default the i18n property jahia_ai_alt of the mixin jmix:jahiaAlt) "
             + "in the edit workspace, with its provenance in the mixin jmix:jahiaAltProvenance; nothing is published. "

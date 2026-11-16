@@ -24,15 +24,19 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -54,6 +58,7 @@ class AltTextJobServiceImplTest {
     /** The images the batch opened, as "identifier/language". */
     private final List<String> opened = new ArrayList<>();
     private final Set<String> gone = new LinkedHashSet<>();
+    private final AtomicLong clock = new AtomicLong();
     private AltTextJobServiceImpl service;
 
     @BeforeEach
@@ -78,6 +83,7 @@ class AltTextJobServiceImplTest {
         };
         service.altTextService = altText;
         service.genAi = genAi;
+        service.nanoTime = clock::get;
         service.configure(Map.of());
     }
 
@@ -113,7 +119,7 @@ class AltTextJobServiceImplTest {
     }
 
     @Test
-    void aJobDoesOneBatchInEachLanguageThenSchedulesTheRest() throws Exception {
+    void aJobDoesAtMostOneBatchInEachLanguageThenSchedulesTheRest() throws Exception {
         when(altText.fillImage(any(), anyBoolean())).thenReturn(result(AltTextResult.Status.GENERATED));
         List<String> images = images(AltTextJobServiceImpl.BATCH_SIZE + 3);
 
@@ -134,13 +140,66 @@ class AltTextJobServiceImplTest {
     }
 
     @Test
-    void theLastBatchSchedulesNothing() throws Exception {
-        when(altText.fillImage(any(), anyBoolean())).thenReturn(result(AltTextResult.Status.SKIPPED));
+    void aJobMakesNoNewModelCallOnceItsTimeIsUp() throws Exception {
+        when(altText.fillImage(any(), anyBoolean())).thenAnswer(invocation -> {
+            clock.addAndGet(TimeUnit.SECONDS.toNanos(AltTextJobServiceImpl.JOB_SECONDS / 2 + 1));
+            return result(AltTextResult.Status.GENERATED);
+        });
 
-        service.runBatch(data(images(3), List.of("en"), false, 0));
+        service.runBatch(data(images(5), List.of("en", "fr"), false, 0));
+
+        // The first image always runs, in every language, even past the time of the job.
+        assertEquals(List.of("img0/en", "img0/fr"), opened);
+        assertEquals(List.of("img1", "img2", "img3", "img4"),
+                scheduled.get(0).data().get(AltTextJobServiceImpl.IDENTIFIERS));
+    }
+
+    @Test
+    void theLastBatchSchedulesNothingAndDropsTheListOfImages() throws Exception {
+        when(altText.fillImage(any(), anyBoolean())).thenReturn(result(AltTextResult.Status.SKIPPED));
+        JobDataMap data = data(images(3), List.of("en"), false, 0);
+
+        service.runBatch(data);
 
         assertEquals(3, opened.size());
         assertTrue(scheduled.isEmpty());
+        assertFalse(data.containsKey(AltTextJobServiceImpl.IDENTIFIERS));
+    }
+
+    @Test
+    void aRetryResumesAtTheLanguageThatFailed() throws Exception {
+        when(altText.fillImage(any(), anyBoolean()))
+                .thenReturn(result(AltTextResult.Status.GENERATED))
+                .thenThrow(new GenAiQuotaExceededException("limit"));
+
+        service.runBatch(data(images(2), List.of("en", "fr", "de"), true, 0));
+
+        Scheduled retry = scheduled.get(0);
+        assertEquals(List.of("img0", "img1"), retry.data().get(AltTextJobServiceImpl.IDENTIFIERS));
+        assertEquals(List.of("fr", "de"), retry.data().get(AltTextJobServiceImpl.FIRST_LANGUAGES));
+        assertEquals(List.of("en", "fr", "de"), retry.data().get(AltTextJobServiceImpl.LANGUAGES));
+
+        opened.clear();
+        doReturn(result(AltTextResult.Status.GENERATED)).when(altText).fillImage(any(), anyBoolean());
+        service.runBatch(retry.data());
+        assertEquals(List.of("img0/fr", "img0/de", "img1/en", "img1/fr", "img1/de"), opened);
+    }
+
+    @Test
+    void anImageThatTheJobCannotFindGetsOneMoreTryAMinuteLater() throws Exception {
+        gone.add("img1");
+        when(altText.fillImage(any(), anyBoolean())).thenReturn(result(AltTextResult.Status.GENERATED));
+
+        service.runBatch(data(images(3), List.of("en"), false, 0));
+
+        assertEquals(1, scheduled.size());
+        Scheduled again = scheduled.get(0);
+        assertEquals(AltTextJobServiceImpl.MISSING_DELAY_SECONDS, again.delaySeconds());
+        assertEquals(List.of("img1"), again.data().get(AltTextJobServiceImpl.IDENTIFIERS));
+        assertTrue(again.data().getBoolean(AltTextJobServiceImpl.MISSING_RETRY));
+
+        service.runBatch(again.data());
+        assertEquals(1, scheduled.size());
     }
 
     @Test
@@ -156,6 +215,7 @@ class AltTextJobServiceImplTest {
         assertEquals(List.of("img1", "img2", "img3"), retry.data().get(AltTextJobServiceImpl.IDENTIFIERS));
         // The job wrote a text before the limit, so the delay starts over.
         assertEquals(1, retry.data().getInt(AltTextJobServiceImpl.RETRIES));
+        assertEquals(List.of("en"), retry.data().get(AltTextJobServiceImpl.FIRST_LANGUAGES));
         assertEquals(60, retry.delaySeconds());
     }
 
@@ -168,7 +228,8 @@ class AltTextJobServiceImplTest {
         assertEquals(3, scheduled.get(0).data().getInt(AltTextJobServiceImpl.RETRIES));
         assertEquals(120, scheduled.get(0).delaySeconds());
 
-        service.runBatch(data(images(2), List.of("en"), false, AltTextJobServiceImpl.MAX_RETRIES));
+        // The sixth attempt in a row that writes nothing ends the run.
+        service.runBatch(data(images(2), List.of("en"), false, AltTextJobServiceImpl.MAX_RETRIES - 1));
         assertEquals(1, scheduled.size());
     }
 
@@ -190,15 +251,14 @@ class AltTextJobServiceImplTest {
     }
 
     @Test
-    void aDeletedOrFailingImageDoesNotStopTheBatch() throws Exception {
-        gone.add("img0");
+    void aFailingImageDoesNotStopTheBatch() throws Exception {
         when(altText.fillImage(any(), anyBoolean()))
                 .thenThrow(new IllegalStateException("broken"))
                 .thenReturn(result(AltTextResult.Status.GENERATED));
 
         service.runBatch(data(images(3), List.of("en"), false, 0));
 
-        assertEquals(List.of("img1/en", "img2/en"), opened);
+        assertEquals(List.of("img0/en", "img1/en", "img2/en"), opened);
         assertTrue(scheduled.isEmpty());
     }
 
@@ -207,8 +267,8 @@ class AltTextJobServiceImplTest {
     }
 
     private static JobDataMap data(List<String> identifiers, List<String> languages, boolean overwrite, int retries) {
-        return AltTextJobServiceImpl.job("run1", identifiers, languages, overwrite, retries, "/users/editor")
-                .getJobDataMap();
+        return new AltTextJobServiceImpl.Work("run1", "/users/editor", identifiers, languages, languages, overwrite,
+                retries, false).toJob().getJobDataMap();
     }
 
     private static AltTextResult result(AltTextResult.Status status) {

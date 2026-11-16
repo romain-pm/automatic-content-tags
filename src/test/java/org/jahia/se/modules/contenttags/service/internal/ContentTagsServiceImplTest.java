@@ -151,11 +151,36 @@ class ContentTagsServiceImplTest {
     }
 
     @Test
-    void theAlternativeTextAndItsProvenanceNeverFeedTheTags() throws Exception {
+    void theAlternativeTextAndItsProvenanceNeverFeedTheTagsOfAnImage() throws Exception {
         service.configure(Map.of("alt.property", "jcr:description"));
+        answer("[\"sunset\"]");
+
+        service.generateTags(withAltText(true), "English", 1);
+
+        String input = sent().input();
+        assertTrue(input.contains("Sunset over the bay"));
+        assertFalse(input.contains("AI wrote"));
+        assertFalse(input.contains("mistral"));
+    }
+
+    @Test
+    void theAlternativeTextPropertyStillFeedsTheTagsOfOtherContent() throws Exception {
+        service.configure(Map.of("alt.property", "jcr:description"));
+        answer("[\"sunset\"]");
+
+        service.generateTags(withAltText(false), "English", 1);
+
+        String input = sent().input();
+        assertTrue(input.contains("AI wrote that"));
+        assertFalse(input.contains("AI wrote this"));
+    }
+
+    /** A node with a title, an AI alternative text, its provenance, and a description. */
+    private static JCRNodeWrapper withAltText(boolean image) throws Exception {
         JCRNodeWrapper node = mock(JCRNodeWrapper.class);
         when(node.getName()).thenReturn("sunset.jpg");
         when(node.getPath()).thenReturn("/sites/s/files/sunset.jpg");
+        when(node.isNodeType("jmix:image")).thenReturn(image);
         List<Property> properties = List.of(
                 i18n("jcr:title", "jnt:file", "Sunset over the bay"),
                 i18n("jahia_ai_alt", "jmix:jahiaAlt", "AI wrote this"),
@@ -165,14 +190,7 @@ class ContentTagsServiceImplTest {
         when(iterator.hasNext()).thenReturn(true, true, true, true, false);
         when(iterator.nextProperty()).thenReturn(properties.get(0), properties.subList(1, 4).toArray(new Property[0]));
         when(node.getProperties()).thenReturn(iterator);
-        answer("[\"sunset\"]");
-
-        service.generateTags(node, "English", 1);
-
-        String input = sent().input();
-        assertTrue(input.contains("Sunset over the bay"));
-        assertFalse(input.contains("AI wrote"));
-        assertFalse(input.contains("mistral"));
+        return node;
     }
 
     @Test

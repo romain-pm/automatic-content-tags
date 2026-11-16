@@ -65,7 +65,7 @@ Every provider of genai-connector: the Jahia AI gateway, Anthropic, OpenAI, Mist
 A background job sends the image to the vision model of the `vision` tier of genai-connector. When the original file is too large or in another format, the job sends the thumbnail that Jahia made. The job saves the answer in the i18n property `jahia_ai_alt` of the image, in the edit workspace, and publishes nothing. The job runs a few seconds after each upload, as the uploader. The GraphQL mutation `scheduleImageAltText` starts the same job for the images already in a site.
 
 **Does the module replace a text that an editor wrote?**
-No. Without the `overwrite` option, the module keeps a text that an editor wrote, changed or marked as reviewed. It replaces only its own unreviewed text, and only when the image file changed since. For example, a new photo uploaded over `team.jpg` gets a new text, unless an editor reviewed the old one.
+No. Without the `overwrite` option, the module keeps a text that an editor wrote, changed or marked as reviewed. It replaces only its own unreviewed text, and only when the picture changed since. For example, a new photo uploaded over `team.jpg` gets a new text, unless an editor reviewed the old one.
 
 **Do I need an API key, and does it cost anything?**
 genai-connector needs one for its provider, and model usage is billed by that provider. The module itself is free (MIT).

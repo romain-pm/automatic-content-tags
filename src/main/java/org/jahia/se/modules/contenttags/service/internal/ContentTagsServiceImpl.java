@@ -183,12 +183,14 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
     /**
      * Collects the internationalized, single-valued string properties of the node and
-     * strips any HTML markup. The alternative text property ({@code alt.property}) and the properties of the AI
-     * alternative text and its provenance are left out, so that AI output never feeds the tags.
+     * strips any HTML markup. The properties of the AI alternative text and its provenance are left out, so that AI
+     * output never feeds the tags, and so is the alternative text property of an image ({@code alt.property}).
      */
     private String extractText(JCRNodeWrapper node, int maxSourceChars, String altProperty) {
         StringBuilder builder = new StringBuilder();
         try {
+            // A property such as jcr:description holds the alternative text on an image only.
+            String imageAltProperty = node.isNodeType("jmix:image") ? altProperty : null;
             PropertyIterator iterator = node.getProperties();
             while (iterator.hasNext()) {
                 Property property = iterator.nextProperty();
@@ -196,7 +198,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
                         && definition.isInternationalized()
                         && !definition.isMultiple()
                         && definition.getRequiredType() == PropertyType.STRING
-                        && !isAiText(definition, altProperty)) {
+                        && !isAiText(definition, imageAltProperty)) {
                     builder.append(property.getValue().getString()).append(' ');
                 }
             }
@@ -213,7 +215,8 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     }
 
     private static boolean isAiText(ExtendedPropertyDefinition definition, String altProperty) {
-        return altProperty.equals(definition.getName()) || definition.getDeclaringNodeType() != null
+        return definition.getName() != null && definition.getName().equals(altProperty)
+                || definition.getDeclaringNodeType() != null
                 && AI_TEXT_MIXINS.contains(definition.getDeclaringNodeType().getName());
     }
 

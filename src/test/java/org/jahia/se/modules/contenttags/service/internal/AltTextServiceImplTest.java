@@ -108,7 +108,7 @@ class AltTextServiceImplTest {
         JCRNodeWrapper image = image("/sites/s/files/cat.png", null, true);
         answer("A grey cat.");
 
-        String fileDigest = AltTextProvenance.fileDigest(image);
+        String pictureDigest = AltTextProvenance.digest(new byte[] {1, 2, 3});
 
         AltTextResult result = service.fillImage(image, false);
 
@@ -118,7 +118,7 @@ class AltTextServiceImplTest {
         verify(image).setProperty(AltTextProvenance.TIER, ModelTier.LITE.id());
         verify(image).setProperty(AltTextProvenance.REVIEWED, false);
         verify(image).setProperty(AltTextProvenance.DIGEST, AltTextProvenance.digest("A grey cat."));
-        verify(image).setProperty(AltTextProvenance.SOURCE, fileDigest);
+        verify(image).setProperty(AltTextProvenance.SOURCE, pictureDigest);
         verify(session).save();
     }
 
@@ -135,7 +135,7 @@ class AltTextServiceImplTest {
     @Test
     void theAiTextOfTheSameImageIsKept() throws Exception {
         JCRNodeWrapper image = image("/sites/s/files/cat.png", "A grey cat.", true);
-        provenance(image, "A grey cat.", false, AltTextProvenance.fileDigest(image));
+        provenance(image, "A grey cat.", false, AltTextProvenance.digest(new byte[] {1, 2, 3}));
 
         assertEquals(Status.SKIPPED, service.fillImage(image, false).status());
         verify(genAi, never()).complete(any());

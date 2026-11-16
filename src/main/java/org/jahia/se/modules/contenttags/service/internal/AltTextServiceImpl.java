@@ -199,7 +199,7 @@ public class AltTextServiceImpl implements AltTextService {
 
     /**
      * What one image needs before its model call: either the result that ends its turn without a call
-     * ({@code result} set), or the image as read, its current text, picture, prompt and file digest.
+     * ({@code result} set), or the image as read, its current text, picture, prompt and picture digest.
      */
     private record Prepared(AltTextResult result, JCRNodeWrapper image, String existing, ImageInput picture,
                             String prompt, String source) {
@@ -211,7 +211,7 @@ public class AltTextServiceImpl implements AltTextService {
 
     /**
      * Every read and every check of the image that comes before its model call. Without {@code overwrite}, an
-     * existing text is kept unless it is the AI's unreviewed text of another version of the image file.
+     * existing text is kept unless it is the AI's unreviewed text of another picture.
      */
     private Prepared prepare(JCRNodeWrapper image, boolean overwrite, Config cfg) throws RepositoryException {
         String path = image.getPath();
@@ -222,18 +222,6 @@ public class AltTextServiceImpl implements AltTextService {
         boolean keepExisting = existing != null && !overwrite;
         if (keepExisting && !AltTextProvenance.isUnreviewedAiText(image, existing)) {
             return Prepared.done(skipped(path, existing));
-        }
-        String source;
-        try {
-            source = AltTextProvenance.fileDigest(image);
-        } catch (IOException e) {
-            LOGGER.warn("Unable to read the image {}", path, e);
-            return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
-                    "The image cannot be read"));
-        }
-        if (keepExisting && source != null && source.equals(AltTextProvenance.source(image))) {
-            return Prepared.done(new AltTextResult(path, AltTextResult.Status.SKIPPED, existing,
-                    "The AI alternative text already describes this image"));
         }
         if (!image.hasPermission(WRITE_PERMISSION)) {
             return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
@@ -255,6 +243,11 @@ public class AltTextServiceImpl implements AltTextService {
         if (payload.isEmpty()) {
             return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
                     "The image has no JPEG, PNG, GIF or WebP rendition of at most " + cfg.maxImageBytes() + " bytes"));
+        }
+        String source = AltTextProvenance.digest(payload.get().data());
+        if (keepExisting && source.equals(AltTextProvenance.source(image))) {
+            return Prepared.done(new AltTextResult(path, AltTextResult.Status.SKIPPED, existing,
+                    "The AI alternative text already describes this image"));
         }
         return new Prepared(null, image, existing, payload.get(), prompt(image, cfg), source);
     }
