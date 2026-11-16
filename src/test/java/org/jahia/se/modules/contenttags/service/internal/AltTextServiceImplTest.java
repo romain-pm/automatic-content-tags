@@ -98,8 +98,68 @@ class AltTextServiceImplTest {
 
         service.fillAltText(image, false, false, null);
 
-        verify(image, never()).addMixin(anyString());
+        verify(image, never()).addMixin(AltTextService.DEFAULT_ALT_MIXIN);
+        verify(image).addMixin(AltTextProvenance.MIXIN);
         verify(image).setProperty("jcr:description", "A grey cat.");
+    }
+
+    @Test
+    void aTextRecordsItsProvenanceAsNotReviewed() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", null, true);
+        answer("A grey cat.");
+
+        String fileDigest = AltTextProvenance.fileDigest(image);
+
+        AltTextResult result = service.fillImage(image, false);
+
+        assertEquals(Status.GENERATED, result.status());
+        verify(image).addMixin(AltTextProvenance.MIXIN);
+        verify(image).setProperty(AltTextProvenance.MODEL, "m");
+        verify(image).setProperty(AltTextProvenance.TIER, ModelTier.LITE.id());
+        verify(image).setProperty(AltTextProvenance.REVIEWED, false);
+        verify(image).setProperty(AltTextProvenance.DIGEST, AltTextProvenance.digest("A grey cat."));
+        verify(image).setProperty(AltTextProvenance.SOURCE, fileDigest);
+        verify(session).save();
+    }
+
+    @Test
+    void theAiTextOfAReplacedImageIsReplaced() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", "A black dog.", true);
+        provenance(image, "A black dog.", null, "digest of the former file");
+        answer("A grey cat.");
+
+        assertEquals(Status.GENERATED, service.fillImage(image, false).status());
+        verify(image).setProperty(AltTextService.DEFAULT_ALT_PROPERTY, "A grey cat.");
+    }
+
+    @Test
+    void theAiTextOfTheSameImageIsKept() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", "A grey cat.", true);
+        provenance(image, "A grey cat.", false, AltTextProvenance.fileDigest(image));
+
+        assertEquals(Status.SKIPPED, service.fillImage(image, false).status());
+        verify(genAi, never()).complete(any());
+    }
+
+    @Test
+    void anAiTextThatAnEditorReviewedOrChangedIsKeptWhenTheImageIsReplaced() throws Exception {
+        JCRNodeWrapper reviewed = image("/sites/s/files/cat.png", "A black dog.", true);
+        provenance(reviewed, "A black dog.", true, "digest of the former file");
+        JCRNodeWrapper changed = image("/sites/s/files/dog.png", "A black dog, edited.", true);
+        provenance(changed, "A black dog.", null, "digest of the former file");
+
+        assertEquals(Status.SKIPPED, service.fillImage(reviewed, false).status());
+        assertEquals(Status.SKIPPED, service.fillImage(changed, false).status());
+        verify(genAi, never()).complete(any());
+    }
+
+    @Test
+    void aNodeThatIsNotAnImageFailsWithoutAModelCall() throws Exception {
+        JCRNodeWrapper file = image("/sites/s/files/doc.pdf", null, true);
+        when(file.isNodeType("jmix:image")).thenReturn(false);
+
+        assertEquals(Status.FAILED, service.fillImage(file, false).status());
+        verify(genAi, never()).complete(any());
     }
 
     @Test
@@ -409,6 +469,29 @@ class AltTextServiceImplTest {
         }
         ImagePayloadTest.resource(image, "jcr:content", "image/png", new byte[] {1, 2, 3});
         return image;
+    }
+
+    /** Marks {@code text} as written by the AI on {@code image}; a null flag or source leaves the property out. */
+    private static void provenance(JCRNodeWrapper image, String text, Boolean reviewed, String source)
+            throws Exception {
+        when(image.isNodeType(AltTextProvenance.MIXIN)).thenReturn(true);
+        property(image, AltTextProvenance.DIGEST, AltTextProvenance.digest(text));
+        if (reviewed != null) {
+            JCRPropertyWrapper flag = mock(JCRPropertyWrapper.class);
+            when(flag.getBoolean()).thenReturn(reviewed);
+            when(image.hasProperty(AltTextProvenance.REVIEWED)).thenReturn(true);
+            when(image.getProperty(AltTextProvenance.REVIEWED)).thenReturn(flag);
+        }
+        if (source != null) {
+            property(image, AltTextProvenance.SOURCE, source);
+        }
+    }
+
+    private static void property(JCRNodeWrapper node, String name, String value) throws Exception {
+        JCRPropertyWrapper property = mock(JCRPropertyWrapper.class);
+        when(property.getString()).thenReturn(value);
+        when(node.hasProperty(name)).thenReturn(true);
+        when(node.getProperty(name)).thenReturn(property);
     }
 
     private JCRNodeWrapper folder(String path, JCRNodeWrapper... images) throws Exception {

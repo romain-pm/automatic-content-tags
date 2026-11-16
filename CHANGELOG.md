@@ -14,9 +14,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already has a text unless `overwrite` is set, and reports one result per image.
 - A rule adds `jmix:jahiaAlt` to each uploaded image, like Jahia adds `jmix:image`, so the Content
   Editor shows the alternative text field on every new image.
-- Alternative text at upload: with `alt.generate.on.upload=true` (the default), the text of each new
-  image is generated a few seconds after the upload, in every site language, as the uploader. An
-  existing text is never replaced.
+- Alternative text at upload: with `alt.generate.on.upload=true` (the default), the upload rule
+  schedules a Jahia background job. The job starts a few seconds after the upload and writes the text
+  in every site language, as the uploader.
+- Alternative text in Jahia background jobs for the images already in a site: the GraphQL mutation
+  `scheduleImageAltText(path, languages, includeSubNodes, overwrite)` schedules a run and returns at
+  once. A run works through its images in jobs of 20 images, as the user who scheduled it. Its jobs
+  are stored in the database, so a run survives a restart.
+- A run waits and goes on when the AI provider is busy or the rate limit of genai-connector is
+  reached: configuration key `alt.retry.delay.seconds` (default 60), doubled on each attempt that
+  writes nothing, up to one hour. An image stopped by the rate limit at upload now gets its text later.
+- Provenance of the AI alternative text: the mixin `jmix:jahiaAltProvenance` records, in each
+  language, the model, the tier, the date, a reviewed flag, and the SHA-256 digests of the text and of
+  the image file. The Content Editor shows the reviewed flag.
+- A replaced image gets a new alternative text when its current text is the AI's own text, which no
+  editor changed or marked as reviewed. A text that an editor wrote, changed or reviewed is kept.
 - Configuration keys `alt.max.length`, `alt.max.images`, `alt.max.seconds`, `alt.max.tokens`, `alt.temperature` and `alt.prompt`. `llm.temperature` now applies to the tags only.
 - The alternative text and the tags of an image use the genai-connector tier `vision`, whose model
   reads images. The operator chooses that model in genai-connector, so this module has no tier key
@@ -35,6 +47,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Unit tests (JUnit 5, Mockito).
 
 ### Changed
+- The alternative text and its provenance no longer feed the tags of an image.
+- `generateImageAltText` stays for its callers and still writes within the request. For a folder,
+  `scheduleImageAltText` needs no `resumeFrom`.
+- The module compiles against genai-connector `0.1.0-SNAPSHOT`, which the Jahia Nexus holds, and the
+  standard Jahia workflows build each pull request and publish `main` to the Jahia Nexus.
 - **Breaking**: the module calls its models through genai-connector, which is now a required
   dependency. The provider, the model and the API key are configured in genai-connector. The keys
   `llm.provider` and `anthropic.*`, `openai.*`, `deepseek.*` are no longer read.

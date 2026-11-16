@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -150,6 +151,31 @@ class ContentTagsServiceImplTest {
     }
 
     @Test
+    void theAlternativeTextAndItsProvenanceNeverFeedTheTags() throws Exception {
+        service.configure(Map.of("alt.property", "jcr:description"));
+        JCRNodeWrapper node = mock(JCRNodeWrapper.class);
+        when(node.getName()).thenReturn("sunset.jpg");
+        when(node.getPath()).thenReturn("/sites/s/files/sunset.jpg");
+        List<Property> properties = List.of(
+                i18n("jcr:title", "jnt:file", "Sunset over the bay"),
+                i18n("jahia_ai_alt", "jmix:jahiaAlt", "AI wrote this"),
+                i18n("jahia_ai_alt_model", "jmix:jahiaAltProvenance", "mistral-medium"),
+                i18n("jcr:description", "jmix:description", "AI wrote that"));
+        PropertyIterator iterator = mock(PropertyIterator.class);
+        when(iterator.hasNext()).thenReturn(true, true, true, true, false);
+        when(iterator.nextProperty()).thenReturn(properties.get(0), properties.subList(1, 4).toArray(new Property[0]));
+        when(node.getProperties()).thenReturn(iterator);
+        answer("[\"sunset\"]");
+
+        service.generateTags(node, "English", 1);
+
+        String input = sent().input();
+        assertTrue(input.contains("Sunset over the bay"));
+        assertFalse(input.contains("AI wrote"));
+        assertFalse(input.contains("mistral"));
+    }
+
+    @Test
     void theKeysOfTheRemovedProvidersAreDetected() {
         Map<String, Object> properties = Map.of(
                 "llm.provider", "anthropic",
@@ -190,6 +216,18 @@ class ContentTagsServiceImplTest {
         when(properties.hasNext()).thenReturn(true, false);
         when(properties.nextProperty()).thenReturn(property);
         return node;
+    }
+
+    private static Property i18n(String name, String declaringType, String text) throws Exception {
+        ExtendedPropertyDefinition definition = definition(declaringType, PropertyType.STRING, false);
+        when(definition.getName()).thenReturn(name);
+        when(definition.isInternationalized()).thenReturn(true);
+        Value value = mock(Value.class);
+        when(value.getString()).thenReturn(text);
+        Property property = mock(Property.class);
+        when(property.getDefinition()).thenReturn(definition);
+        when(property.getValue()).thenReturn(value);
+        return property;
     }
 
     private void answer(String text) {

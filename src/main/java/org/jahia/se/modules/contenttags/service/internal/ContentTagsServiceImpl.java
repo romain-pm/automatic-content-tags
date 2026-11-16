@@ -5,6 +5,7 @@ import org.jahia.modules.genai.api.CompletionResult;
 import org.jahia.modules.genai.api.GenAiService;
 import org.jahia.modules.genai.api.ImageInput;
 import org.jahia.modules.genai.api.ModelTier;
+import org.jahia.se.modules.contenttags.service.AltTextService;
 import org.jahia.se.modules.contenttags.service.ContentTagsService;
 import org.jahia.se.modules.contenttags.service.TagTarget;
 import org.jahia.services.content.JCRNodeWrapper;
@@ -26,6 +27,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Default {@link ContentTagsService} implementation.
@@ -55,6 +57,8 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     private static final int MIN_TAG_COUNT = 1;
     // Hard safety ceiling for the configurable maximum, to protect the token budget.
     private static final int ABSOLUTE_MAX_TAG_COUNT = 50;
+    // The mixins of the AI alternative text and of its provenance: AI output never feeds the tags.
+    private static final Set<String> AI_TEXT_MIXINS = Set.of(AltTextService.DEFAULT_ALT_MIXIN, AltTextProvenance.MIXIN);
     static final String DEFAULT_TAG_PROPERTY = "j:tagList";
     static final String DEFAULT_TAG_MIXIN = "jmix:tagged";
 
@@ -96,7 +100,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         Config cfg = config;
         int count = clampCount(numberOfTags, cfg.tagCountDefault(), cfg.tagCountMax());
 
-        String text = extractText(node, cfg.maxSourceChars());
+        String text = extractText(node, cfg.maxSourceChars(), cfg.altProperty());
         Optional<ImageInput> picture = picture(node, cfg);
         if (text.isEmpty() && picture.isEmpty()) {
             LOGGER.debug("No internationalized text and no image found on node {}", node.getPath());
@@ -179,9 +183,10 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
     /**
      * Collects the internationalized, single-valued string properties of the node and
-     * strips any HTML markup.
+     * strips any HTML markup. The alternative text property ({@code alt.property}) and the properties of the AI
+     * alternative text and its provenance are left out, so that AI output never feeds the tags.
      */
-    private String extractText(JCRNodeWrapper node, int maxSourceChars) {
+    private String extractText(JCRNodeWrapper node, int maxSourceChars, String altProperty) {
         StringBuilder builder = new StringBuilder();
         try {
             PropertyIterator iterator = node.getProperties();
@@ -190,7 +195,8 @@ public class ContentTagsServiceImpl implements ContentTagsService {
                 if (property.getDefinition() instanceof ExtendedPropertyDefinition definition
                         && definition.isInternationalized()
                         && !definition.isMultiple()
-                        && definition.getRequiredType() == PropertyType.STRING) {
+                        && definition.getRequiredType() == PropertyType.STRING
+                        && !isAiText(definition, altProperty)) {
                     builder.append(property.getValue().getString()).append(' ');
                 }
             }
@@ -206,11 +212,16 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         return text;
     }
 
+    private static boolean isAiText(ExtendedPropertyDefinition definition, String altProperty) {
+        return altProperty.equals(definition.getName()) || definition.getDeclaringNodeType() != null
+                && AI_TEXT_MIXINS.contains(definition.getDeclaringNodeType().getName());
+    }
+
     /**
      * Immutable configuration snapshot.
      */
     record Config(TargetProperty tagTarget, ModelTier tier, String prompt, int maxTokens, Double temperature,
-                  int maxSourceChars, int maxImageBytes, int tagCountDefault, int tagCountMax) {
+                  int maxSourceChars, int maxImageBytes, int tagCountDefault, int tagCountMax, String altProperty) {
 
         static Config from(ConfigValues values) {
             // Configurable ceiling, bounded by the absolute safety max; the default count can never exceed it.
@@ -226,7 +237,8 @@ public class ContentTagsServiceImpl implements ContentTagsService {
                     values.integer("llm.max.source.chars", DEFAULT_MAX_SOURCE_CHARS, 1, Integer.MAX_VALUE),
                     ImagePayload.maxBytes(values),
                     values.integer("llm.tag.count.default", DEFAULT_TAG_COUNT, MIN_TAG_COUNT, tagCountMax),
-                    tagCountMax);
+                    tagCountMax,
+                    values.string("alt.property", AltTextService.DEFAULT_ALT_PROPERTY));
         }
     }
 }

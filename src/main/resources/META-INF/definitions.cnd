@@ -3,10 +3,22 @@
 // The alternative text of an image. The rule "Set alternative text mixin on image update" of
 // META-INF/rules.drl adds this mixin to every uploaded image, so the Content Editor shows the field:
 // the editor ignores "extends = jmix:image", because an image's primary type is jnt:file. The
-// generateImageAltText GraphQL mutation also adds the mixin before it writes.
+// module also adds the mixin before it writes a text.
 // Never put a hyphen in a property name here: Jahia stores this file re-serialized without quotes in
 // its definitions table, and a node that loads it from there reads the hyphen as a new property.
 [jmix:jahiaAlt] mixin
  extends = jmix:image
  itemtype = content
  - jahia_ai_alt (string, textarea) i18n
+
+// Where the AI alternative text of an image comes from, in each language. The module adds this mixin when it
+// writes a text. Only the reviewed flag shows in the Content Editor: an editor checks it to keep the text when
+// the image is replaced. The digest of the text tells a text an editor changed since from the AI's own text.
+[jmix:jahiaAltProvenance] mixin
+ itemtype = content
+ - jahia_ai_alt_reviewed (boolean) = false i18n
+ - jahia_ai_alt_model (string) i18n hidden nofulltext
+ - jahia_ai_alt_tier (string) i18n hidden nofulltext
+ - jahia_ai_alt_date (date) i18n hidden
+ - jahia_ai_alt_digest (string) i18n hidden nofulltext
+ - jahia_ai_alt_source (string) i18n hidden nofulltext

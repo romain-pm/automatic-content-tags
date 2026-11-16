@@ -41,9 +41,9 @@ import java.util.function.LongSupplier;
  *
  * <p>For each image it sends one rendition of the picture, with a short instruction, to the model of
  * the genai-connector tier {@code vision}, cleans the answer and saves it in the property of
- * {@code alt.property} (default {@code jahia_ai_alt}), in the locale of the caller's session. It never opens a system session: an image the caller cannot
- * read is not listed, and an image the caller cannot edit is reported as failed before any model
- * call.</p>
+ * {@code alt.property} (default {@code jahia_ai_alt}), in the locale of the caller's session, with its provenance
+ * ({@link AltTextProvenance}). It never opens a system session: an image the caller cannot read is not listed, and
+ * an image the caller cannot edit is reported as failed before any model call.</p>
  */
 @Component(service = AltTextService.class, configurationPid = ConfigValues.PID, immediate = true)
 public class AltTextServiceImpl implements AltTextService {
@@ -91,15 +91,7 @@ public class AltTextServiceImpl implements AltTextService {
         for (JCRNodeWrapper listed : images.values()) {
             String path = listed.getPath();
             try {
-                JCRNodeWrapper image = listed;
-                Prepared prepared;
-                try {
-                    prepared = prepare(image, overwrite, cfg);
-                } catch (InvalidItemStateException e) {
-                    // A stale read before the model call: check the fresh copy once more.
-                    image = reload(image);
-                    prepared = prepare(image, overwrite, cfg);
-                }
+                Prepared prepared = prepareFresh(listed, overwrite, cfg);
                 if (prepared.result() != null) {
                     results.add(prepared.result());
                     continue;
@@ -109,7 +101,7 @@ public class AltTextServiceImpl implements AltTextService {
                     return new AltTextReport(results, path);
                 }
                 modelCalls++;
-                results.add(generate(image, prepared, overwrite, cfg));
+                results.add(generate(prepared, overwrite, cfg));
             } catch (GenAiQuotaExceededException e) {
                 results.add(new AltTextResult(path, AltTextResult.Status.FAILED, null,
                         "The AI rate limit is reached, try again later"));
@@ -127,6 +119,22 @@ public class AltTextServiceImpl implements AltTextService {
             }
         }
         return new AltTextReport(results, null);
+    }
+
+    @Override
+    public AltTextResult fillImage(JCRNodeWrapper image, boolean overwrite) throws RepositoryException {
+        Config cfg = config;
+        Prepared prepared = prepareFresh(image, overwrite, cfg);
+        return prepared.result() != null ? prepared.result() : generate(prepared, overwrite, cfg);
+    }
+
+    /** {@link #prepare}, once more on a fresh copy of the image after a stale read. */
+    private Prepared prepareFresh(JCRNodeWrapper image, boolean overwrite, Config cfg) throws RepositoryException {
+        try {
+            return prepare(image, overwrite, cfg);
+        } catch (InvalidItemStateException e) {
+            return prepare(reload(image), overwrite, cfg);
+        }
     }
 
     private static AltTextResult skipped(String path, String existing) {
@@ -153,7 +161,7 @@ public class AltTextServiceImpl implements AltTextService {
      * The node itself when it is an image, then the images below it when asked, by path. The path order is the
      * same on every invocation, so a later invocation can resume where an earlier one stopped.
      */
-    private static NavigableMap<String, JCRNodeWrapper> images(JCRNodeWrapper node, boolean includeSubNodes)
+    static NavigableMap<String, JCRNodeWrapper> images(JCRNodeWrapper node, boolean includeSubNodes)
             throws RepositoryException {
         NavigableMap<String, JCRNodeWrapper> images = new TreeMap<>();
         if (node.isNodeType("jmix:image")) {
@@ -191,21 +199,41 @@ public class AltTextServiceImpl implements AltTextService {
 
     /**
      * What one image needs before its model call: either the result that ends its turn without a call
-     * ({@code result} set), or its current text, picture and prompt.
+     * ({@code result} set), or the image as read, its current text, picture, prompt and file digest.
      */
-    private record Prepared(AltTextResult result, String existing, ImageInput picture, String prompt) {
+    private record Prepared(AltTextResult result, JCRNodeWrapper image, String existing, ImageInput picture,
+                            String prompt, String source) {
 
         static Prepared done(AltTextResult result) {
-            return new Prepared(result, null, null, null);
+            return new Prepared(result, null, null, null, null, null);
         }
     }
 
-    /** Every read and every check of the image that comes before its model call. */
+    /**
+     * Every read and every check of the image that comes before its model call. Without {@code overwrite}, an
+     * existing text is kept unless it is the AI's unreviewed text of another version of the image file.
+     */
     private Prepared prepare(JCRNodeWrapper image, boolean overwrite, Config cfg) throws RepositoryException {
         String path = image.getPath();
+        if (!image.isNodeType("jmix:image")) {
+            return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, null, "The node is not an image"));
+        }
         String existing = existingAltText(image, cfg);
-        if (existing != null && !overwrite) {
+        boolean keepExisting = existing != null && !overwrite;
+        if (keepExisting && !AltTextProvenance.isUnreviewedAiText(image, existing)) {
             return Prepared.done(skipped(path, existing));
+        }
+        String source;
+        try {
+            source = AltTextProvenance.fileDigest(image);
+        } catch (IOException e) {
+            LOGGER.warn("Unable to read the image {}", path, e);
+            return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
+                    "The image cannot be read"));
+        }
+        if (keepExisting && source != null && source.equals(AltTextProvenance.source(image))) {
+            return Prepared.done(new AltTextResult(path, AltTextResult.Status.SKIPPED, existing,
+                    "The AI alternative text already describes this image"));
         }
         if (!image.hasPermission(WRITE_PERMISSION)) {
             return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
@@ -228,11 +256,11 @@ public class AltTextServiceImpl implements AltTextService {
             return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
                     "The image has no JPEG, PNG, GIF or WebP rendition of at most " + cfg.maxImageBytes() + " bytes"));
         }
-        return new Prepared(null, existing, payload.get(), prompt(image, cfg));
+        return new Prepared(null, image, existing, payload.get(), prompt(image, cfg), source);
     }
 
-    private AltTextResult generate(JCRNodeWrapper image, Prepared prepared, boolean overwrite, Config cfg)
-            throws RepositoryException {
+    private AltTextResult generate(Prepared prepared, boolean overwrite, Config cfg) throws RepositoryException {
+        JCRNodeWrapper image = prepared.image();
         String path = image.getPath();
         String existing = prepared.existing();
         CompletionResult result;
@@ -263,6 +291,7 @@ public class AltTextServiceImpl implements AltTextService {
                 image.addMixin(mixin);
             }
             image.setProperty(cfg.target().property(), altText);
+            AltTextProvenance.write(image, altText, result, prepared.source());
             image.getSession().save();
         } catch (AccessDeniedException e) {
             image.getSession().refresh(false);

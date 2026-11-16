@@ -4,8 +4,9 @@ This module uses AI to write two kinds of metadata in Jahia:
 
 - **Tags**: an "Auto Tagging" action in the Content Editor fills `j:tagList` with tags generated from
   the text of the content. An image is tagged from its picture, with a vision model.
-- **Alternative text of images**: a GraphQL mutation writes the `jahia_ai_alt` property of an image, or
-  of every image below a folder, with a vision model that looks at the picture.
+- **Alternative text of images**: a Jahia background job writes the `jahia_ai_alt` property of each
+  uploaded image, with a vision model that looks at the picture. A GraphQL mutation schedules the same
+  job for one image or for every image below a folder.
 
 The module reaches its models through [genai-connector](https://github.com/Jahia/genai-connector).
 It holds no provider, model or API key of its own: the operator configures them once, in
@@ -32,8 +33,11 @@ Compatible with Jahia 8.2 (genai-connector requires 8.2.2). Requires Java 17 to 
 - **Editor controls**: choose the **number of tags** (default 5, up to the admin-configured
   `llm.tag.count.max`) and whether to **replace** the existing tags or **add to** them.
 - **Alternative text of images**: the mixin `jmix:jahiaAlt` extends `jmix:image` with the i18n
-  property `jahia_ai_alt`. The GraphQL mutation `generateImageAltText` fills it for one image, or for
-  every image below a path.
+  property `jahia_ai_alt`. Background jobs fill it after each upload, and the GraphQL mutation
+  `scheduleImageAltText` schedules them for the images already in a site.
+- **Provenance of the AI text**: the mixin `jmix:jahiaAltProvenance` records the model, the tier, the
+  date and a reviewed flag of each AI text. A replaced image gets a new text, unless an editor wrote,
+  changed or reviewed the current one.
 - **Configurable targets**: the property and mixin that receive the alternative text and the tags come
   from the configuration (`alt.property`, `alt.mixin`, `llm.tag.property`, `llm.tag.mixin`).
 - **One AI configuration**: provider, model and key come from genai-connector, which also applies
@@ -44,19 +48,20 @@ Compatible with Jahia 8.2 (genai-connector requires 8.2.2). Requires Java 17 to 
 ```
 src/main/java/org/jahia/se/modules/contenttags/
 ├── actions/                       # POST-only render actions of the tagging dialog (CSRF-whitelisted)
-├── graphql/                       # Mutation.generateImageAltText and its result types
+├── graphql/                       # Mutations scheduleImageAltText and generateImageAltText, result types
 ├── service/ContentTagsService     # Tag generation
 ├── service/AltTextService         # Alternative text generation
-└── service/internal/              # Implementations, text extraction, response cleaning
+├── service/AltTextJobService      # Runs of alternative text in Jahia background jobs
+└── service/internal/              # Implementations, the Quartz job, provenance, response cleaning
 
-src/main/resources/META-INF/definitions.cnd   # jmix:jahiaAlt (extends jmix:image)
+src/main/resources/META-INF/definitions.cnd   # jmix:jahiaAlt (extends jmix:image), jmix:jahiaAltProvenance
 src/javascript/                                # React 18 UI extension (Module Federation)
 ```
 
 ## Installation
 
-1. Build and install genai-connector first (`mvn clean install` in its checkout), because no Maven
-   repository holds it yet.
+1. Maven resolves genai-connector `0.1.0-SNAPSHOT` from the Jahia public Nexus, where the `main`
+   branch of genai-connector publishes it.
 2. Build the module:
    ```bash
    mvn clean install
@@ -69,35 +74,19 @@ src/javascript/                                # React 18 UI extension (Module F
 
 ## Configuration
 
-`org.jahia.se.modules.contenttags.cfg` in `digital-factory-data/karaf/etc/`. Every key is optional;
-the defaults are shown.
+`org.jahia.se.modules.contenttags.cfg` in `digital-factory-data/karaf/etc/`. Every key is optional.
+The [shipped file](src/main/resources/META-INF/configurations/org.jahia.se.modules.contenttags.cfg)
+lists each key with its default and its range, and Jahia installs it when the module starts for the
+first time. A change applies without a restart.
 
-```properties
-# --- Tags ---
-llm.tier=lite                 # genai-connector tier of the tags of a content: lite | balanced | advanced
-                              # (an image is tagged from its picture, on the tier vision)
-llm.tag.property=j:tagList    # property that receives the tags
-llm.tag.mixin=jmix:tagged     # mixin that declares it; empty when the content type declares it
-llm.tag.count.max=20          # most tags a request may generate (hard-capped at 50)
-llm.tag.count.default=5       # tag count when the dialog sends none
-llm.max.tokens=1024
-llm.max.source.chars=6000     # characters of content text sent to the model
-llm.temperature=              # empty = provider default, for the tags
-image.max.bytes=5242880       # largest image sent to the model, for the alternative text and the tags;
-                              # a larger original is replaced by its Jahia thumbnail
-#llm.user.prompt=Respond ONLY with a JSON array of concise single- or two-word strings, without markdown, explanations or duplicates.
+The keys fall into two groups:
 
-# --- Alternative text ---
-alt.generate.on.upload=true   # generate the text of each new image, in every site language
-alt.property=jahia_ai_alt     # property that receives the text: a single-valued string
-alt.mixin=jmix:jahiaAlt       # mixin added before writing; empty when the image types declare it
-alt.max.length=150            # characters of one alternative text (20 to 1000)
-alt.max.images=20             # images sent to the model per call (1 to 500)
-alt.max.seconds=60            # no new model call after this time in one call (5 to 600)
-alt.max.tokens=300
-alt.temperature=              # empty = provider default, for the alternative text
-#alt.prompt=                  # replaces the built-in instructions
-```
+- `llm.*` keys set the tags: the tier, the target property, the tag count, the prompt and the limits.
+- `alt.*` keys set the alternative text: generation at upload, the target property, the length and
+  the prompt. They also set the limits of `generateImageAltText` and the retry delay of the background
+  jobs.
+
+`image.max.bytes` sets the largest image sent to the model, for both features.
 
 > The number of tags and the tag language come from the dialog on every request and are injected
 > authoritatively by the module. Keep `llm.user.prompt` to style guidance only.
@@ -143,14 +132,13 @@ rendition is tagged from its text only, on `llm.tier`.
 
 ### Alternative text of images
 
-Call the mutation on `/modules/graphql` as an authenticated editor:
+An uploaded image gets its text in a background job, as [At upload](#at-upload) states. For the images
+already in a site, schedule a run on `/modules/graphql` as an authenticated editor:
 
 ```graphql
 mutation {
-  generateImageAltText(path: "/sites/digitall/files/images", language: "en",
-                       includeSubNodes: true, overwrite: false) {
-    generated skipped failed truncated resumeFrom
-    images { path status altText message }
+  scheduleImageAltText(path: "/sites/digitall/files/images", includeSubNodes: true) {
+    jobName images languages
   }
 }
 ```
@@ -158,21 +146,78 @@ mutation {
 | Argument | Default | Meaning |
 |---|---|---|
 | `path` | required | An image (`jmix:image`), or a node above images when `includeSubNodes` is true |
-| `language` | required | The language of the text, one of the site languages |
+| `languages` | every site language | The language codes of the texts, such as `en` and `fr` |
 | `includeSubNodes` | `false` | Also process every image below `path` |
-| `overwrite` | `false` | Replace an existing alternative text; otherwise such an image is `SKIPPED` |
-| `resumeFrom` | none | The `resumeFrom` of an earlier report, to continue from that image |
+| `overwrite` | `false` | Replace any existing text; otherwise an image keeps its text, as [Which text is kept](#which-text-is-kept) states |
+
+- The mutation lists the images, schedules the run and returns at once. It answers an error when
+  genai-connector has no model for the tier `vision`.
+- Jahia background jobs write the texts as the calling user, 20 images per job. The server log reports
+  each job. For example, a folder of 500 images in English and French takes 25 jobs and 1,000 model
+  calls.
+- The jobs are stored in the database, so a run survives a restart. A job that a crash stopped runs
+  again, and it skips the images it already did.
+- A run can meet the rate limit of genai-connector, or an AI provider that is still busy after the
+  retries of genai-connector. The run then waits `alt.retry.delay.seconds` and goes on with the images
+  left. The delay doubles on each attempt that writes nothing, up to one hour. The run stops after 6
+  such attempts in a row.
+
+The mutation `generateImageAltText(path, language, includeSubNodes, overwrite, resumeFrom)` stays for
+its existing callers. It writes the texts within the request, in one language, and returns one result
+per image:
+
+```graphql
+mutation {
+  generateImageAltText(path: "/sites/digitall/files/images/cat.png", language: "en") {
+    generated skipped failed truncated resumeFrom
+    images { path status altText message }
+  }
+}
+```
+
+- A call stops at `alt.max.images` model calls or at `alt.max.seconds`. It also stops at the rate limit
+  of genai-connector, or when the AI provider is busy. It then returns `truncated: true` and a
+  `resumeFrom` path. Call it again with that `resumeFrom` to continue. The images are visited in path
+  order.
+- `images` lists the generated and failed images. Ask `images(includeSkipped: true)` to also list
+  the skipped ones; `skipped` counts them in both cases.
+
+#### Which text is kept
+
+Each text that the module writes records its provenance in the mixin `jmix:jahiaAltProvenance`, in
+the language of the text. The provenance holds the model, the tier, the date and a reviewed flag. It
+also holds the SHA-256 digests of the text and of the image file. Without `overwrite`, the module
+applies these rules:
+
+- An image with no text gets one.
+- A text that an editor wrote is kept.
+- An AI text that an editor changed is kept, because its digest no longer matches.
+- An AI text that an editor marked as reviewed is kept. The Content Editor shows the "Reviewed by an
+  editor" checkbox of an image once the AI wrote its text.
+- Any other AI text is replaced when the image file changed since the AI wrote it. For example, an
+  editor uploads a new photo as `team.jpg` over the old one, and the job writes a text for the new
+  photo.
+- A text that an earlier 2.0.0 snapshot wrote has no provenance, so it is kept.
+
+#### At upload
+
+- A rule (`META-INF/rules.drl`) adds `jmix:jahiaAlt` to each image when it is uploaded or replaced,
+  on the same trigger as Jahia's own `jmix:image`, so the Content Editor shows the field on every
+  image. The Content Editor ignores `extends = jmix:image`, because an image's primary type is
+  `jnt:file`. An image uploaded before the module gets the mixin when it is replaced, or when the
+  module writes its text. The rule always adds `jmix:jahiaAlt`, even when `alt.mixin` names another
+  mixin.
+- With `alt.generate.on.upload=true` (the default), the same rule schedules a background job. The job
+  starts a few seconds after the upload. It writes the text in every language of the image's site, as
+  the uploader, and keeps a text as [Which text is kept](#which-text-is-kept) states. The upload
+  itself does not wait for the model.
+
+#### The text
 
 - The text is written in the edit workspace, in the configured property: by default the i18n property
   `jahia_ai_alt` of the mixin `jmix:jahiaAlt`. Nothing is published.
 - The name `jahia_ai_alt` marks the text as written by AI, and the help of the field in the Content
   Editor says that AI must fill it. A template or a script can therefore treat its value as AI-written.
-- Each image is saved on its own, and the images are visited in path order. A call stops with
-  `truncated: true` and a `resumeFrom` path when it reaches `alt.max.images` model calls or
-  `alt.max.seconds`, at the rate limit of genai-connector, or when the AI provider is busy or
-  unavailable. Call it again with that `resumeFrom` to continue, also with `overwrite: true`.
-- `images` lists the generated and failed images. Ask `images(includeSkipped: true)` to also list
-  the skipped ones; `skipped` counts them in both cases.
 - The model of the tier `vision` receives the original file when it is a JPEG, PNG, GIF or WebP of
   at most `image.max.bytes`, otherwise the thumbnail Jahia generated for the image. An image with neither
   is reported `FAILED`.
@@ -181,22 +226,16 @@ mutation {
   one line of plain text and cut at `alt.max.length`, so it cannot add markup to a page.
 - Read the text back with `property(name: "jahia_ai_alt", language: "en")`, or edit it in the Content
   Editor, where it shows as the "AI alternative text" field of an image.
-- A rule (`META-INF/rules.drl`) adds `jmix:jahiaAlt` to each image when it is uploaded or replaced,
-  on the same trigger as Jahia's own `jmix:image`, so the Content Editor shows the field on every image.
-- With `alt.generate.on.upload=true` (the default), the same rule also queues the generation of the
-  text. A few seconds after the upload, it is written in every language of the image's site, as the
-  uploader, without replacing an existing text. The upload itself does not wait for the model, and
-  the server log says what each language got. The
-  Content Editor ignores `extends = jmix:image`, because an image's primary type is `jnt:file`. An
-  image uploaded before the module gets the mixin when it is replaced, or when the mutation writes
-  its text. The rule always adds `jmix:jahiaAlt`, even when `alt.mixin` names another mixin.
+- The alternative text and its provenance never feed the tags. The tags of an image come from its
+  picture, its file name and its other text.
 
 ## Security notes
 
 - The tagging actions accept **POST only**, require an authenticated user with `jcr:write_default`
   permission on the node, and read content strictly through the caller's JCR session.
-- The mutation refuses the guest user, runs under the caller's session, lists only the images that
-  user can read, and makes no model call for an image that user cannot edit (`jcr:write_default`).
+- The mutations refuse the guest user and list only the images that the caller can read. A background
+  job runs as the user who scheduled it or uploaded the image. It makes no model call for an image
+  that user cannot edit (`jcr:write_default`).
 - The CSRF guard whitelist covers only `*.generateContentTagsAction.do` and `*.contentTagsConfig.do`;
   `/modules/graphql` keeps its own protections.
 - Content text and image bytes go to the model of the configured genai-connector tier. Content text is
