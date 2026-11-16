@@ -21,7 +21,7 @@ Generate content tags and image alternative text with AI, through Jahia's genai-
 
 Automatic Content Tags adds an **Auto Tagging** action to the Jahia Content Editor. In one click it reads the text of the content you are editing, sends it to a large language model, and fills the content's tag field with relevant, on-topic tags — in the language you choose. On an image, a vision model looks at the picture, so the tags describe what it shows.
 
-It also writes the **alternative text of images**: a GraphQL mutation sends each image to a vision model and saves its description in the image's `jahia_ai_alt` property, for one image or for a whole folder.
+It also writes the **alternative text of images**. After each upload, a Jahia background job sends the image to a vision model. The job saves the description in the image's `jahia_ai_alt` property, in every language of the site. A GraphQL mutation schedules the same job for the images already in a site.
 
 The module reaches its models through **genai-connector**, Jahia's shared AI connector. The provider, the model and the API key are configured once in genai-connector, for every AI feature of the platform: the Jahia AI gateway, Anthropic, OpenAI, Mistral, Azure OpenAI, Amazon Bedrock or any OpenAI-compatible endpoint.
 
@@ -30,7 +30,9 @@ It is built to Jahia's security and integration standards: the action is POST-on
 **Key features**
 
 - One-click **Auto Tagging** action in the Content Editor 3-dots menu.
-- **Alternative text of images** through the GraphQL mutation `generateImageAltText`, for one image or every image below a path, in any site language.
+- **Alternative text of images** at upload, in background jobs that survive a restart and wait when the AI provider is busy.
+- **Alternative text for existing images** through the GraphQL mutation `scheduleImageAltText`, for one image or every image below a path.
+- **Provenance of each AI text**: the model, the date and a reviewed flag. A replaced image gets a new text, unless an editor wrote, changed or reviewed the current one.
 - **One AI configuration** in genai-connector: provider, model, key, rate limit and audit log.
 - **Pick the tag language** at generation time, independently of the content language.
 - **Choose how many tags** (up to the configured maximum) and whether to **replace** the existing tags or **add to** them, right in the dialog.
@@ -48,22 +50,9 @@ It is built to Jahia's security and integration standards: the action is POST-on
 
 1. **Install the module.** In Jahia Administration → Modules, upload the module JAR (or install it directly from the Jahia Store), then start it.
 2. **Enable it on your site.** In Administration → Modules, add *Automatic Content Tags* to the site(s) where you want the action available. (The Auto Tagging action only appears on sites where the module is enabled.)
-3. **Configure AI in genai-connector.** Set the provider, the model and the key of the `lite` and `vision` tiers in `org.jahia.modules.genai.cfg` (see the genai-connector documentation). Optionally tune this module in `org.jahia.se.modules.contenttags.cfg` in `digital-factory-data/karaf/etc/`:
-
-   ```properties
-   # genai-connector tier of the tags of a content (default shown); images always use vision
-   #llm.tier=lite
-   #image.max.bytes=5242880
-   #llm.max.tokens=1024
-   #llm.max.source.chars=6000
-   #llm.tag.count.max=20
-   #llm.tag.count.default=5
-   # Style guidance only — the tag count and language come from the dialog.
-   #llm.user.prompt=Respond ONLY with a JSON array of concise single- or two-word strings, without markdown, explanations or duplicates.
-   ```
-
-   The configuration is picked up automatically — no restart needed.
-4. **Use it.** Open a content item in the Content Editor, open the 3-dots menu, click **Auto Tagging**, choose the tag language, the number of tags and whether to replace or add to existing tags, then click **Apply**. Save the content to persist the generated tags.
+3. **Configure AI in genai-connector.** Set the provider, the model and the key of the `lite` and `vision` tiers in `org.jahia.modules.genai.cfg`. The genai-connector documentation describes these keys.
+4. **Tune the module if you need to.** Edit `org.jahia.se.modules.contenttags.cfg` in `digital-factory-data/karaf/etc/`. Jahia installs this file when the module starts for the first time, and the file lists each key with its default. For example, set `alt.generate.on.upload=false` to stop the alternative text at upload. A change applies without a restart.
+5. **Use it.** Open a content item in the Content Editor, open the 3-dots menu, click **Auto Tagging**, choose the tag language, the number of tags and whether to replace or add to existing tags, then click **Apply**. Save the content to persist the generated tags.
 
 > This module holds no API key: the key lives only in the genai-connector configuration on the server.
 
@@ -73,16 +62,24 @@ It is built to Jahia's security and integration standards: the action is POST-on
 Every provider of genai-connector: the Jahia AI gateway, Anthropic, OpenAI, Mistral, Azure OpenAI, Amazon Bedrock and any OpenAI-compatible endpoint. The operator chooses it in genai-connector.
 
 **How is the alternative text of an image generated?**
-The GraphQL mutation `generateImageAltText` sends the image (or its Jahia thumbnail when the original is too large or in another format) to the vision model of the configured tier, and saves the answer in the i18n property `jahia_ai_alt` of the image, in the edit workspace. It skips an image that already has a text unless `overwrite` is true.
+A background job sends the image to the vision model of the `vision` tier of genai-connector. When the original file is too large or in another format, the job sends the thumbnail that Jahia made. The job saves the answer in the i18n property `jahia_ai_alt` of the image, in the edit workspace, and publishes nothing. The job runs a few seconds after each upload, as the uploader. The GraphQL mutation `scheduleImageAltText` starts the same job for the images already in a site.
+
+**Does the module replace a text that an editor wrote?**
+No. Without the `overwrite` option, the module keeps a text that an editor wrote, changed or marked as reviewed. It replaces only its own unreviewed text, and only when the image file changed since. For example, a new photo uploaded over `team.jpg` gets a new text, unless an editor reviewed the old one.
 
 **Do I need an API key, and does it cost anything?**
 genai-connector needs one for its provider, and model usage is billed by that provider. The module itself is free (MIT).
 
 **What content is sent to the AI provider?**
-Only the internationalized text of the content item you are tagging, with HTML stripped and truncated to `llm.max.source.chars` (6000 by default). Nothing is sent until you click Apply. The module does not store your content or the responses.
+Two features send content, at two different times:
+
+- Tags: when you click Apply, the module sends the internationalized text of the content item, with HTML stripped and truncated to `llm.max.source.chars`. For an image, it also sends the picture and the file name.
+- Alternative text: after each upload, the module sends the picture, its file name and its title, unless `alt.generate.on.upload` is false. A GraphQL mutation sends the same data for the images it names.
+
+The module stores the AI answers and their provenance on the content. It stores no other copy of your content.
 
 **Which content types can be tagged?**
-Standard content, pages and main-resource content (`jnt:content`, `jnt:page`, `jmix:mainResource`). The action is hidden on other node types and on sites where the module is not enabled.
+Standard content, pages, main-resource content and images (`jnt:content`, `jnt:page`, `jmix:mainResource`, `jmix:image`). The action is hidden on other node types and on sites where the module is not enabled.
 
 **Does it tag unsaved changes?**
 No. Tags are generated from the last saved version of the content. Save your edits first, then run Auto Tagging.
@@ -103,7 +100,7 @@ You choose the tag language in the dialog at generation time; it is independent 
 This module never sees it. The key lives only in the genai-connector configuration on the server.
 
 **Does it work in production / clustered environments?**
-Yes. It is a standard OSGi module with no special infrastructure requirements beyond genai-connector and its access to the provider.
+Yes. It is a standard OSGi module that needs only genai-connector and its access to the provider. The alternative text jobs are stored in the Jahia database, and the processing node runs them.
 
 ## Tags / keywords
 
