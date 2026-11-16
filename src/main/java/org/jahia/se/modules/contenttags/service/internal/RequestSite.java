@@ -17,14 +17,16 @@ final class RequestSite {
     }
 
     /**
-     * @return the key of the site of {@code node}, such as {@code digitall}, or {@code null} for a node that no site
-     *         under {@code /sites} holds, such as a file of a module
+     * @return the key of the site under {@code /sites} that holds {@code node}, such as {@code digitall}, or
+     *         {@code null} for a node outside {@code /sites}, such as a file of a user or of a module. Jahia resolves
+     *         such a node to {@code systemsite}, which is not the site of the node.
      */
     static String of(JCRNodeWrapper node) throws RepositoryException {
-        JCRSiteNode site = node.getResolveSite();
-        if (site == null || site.getPath() == null || !site.getPath().startsWith(SITES)) {
+        String path = node.getPath();
+        if (path == null || !path.startsWith(SITES)) {
             return null;
         }
-        return site.getSiteKey();
+        JCRSiteNode site = node.getResolveSite();
+        return site == null ? null : site.getSiteKey();
     }
 }

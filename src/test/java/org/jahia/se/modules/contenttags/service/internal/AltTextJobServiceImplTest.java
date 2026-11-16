@@ -84,6 +84,7 @@ class AltTextJobServiceImplTest {
                 opened.add(identifier + "/" + language);
                 JCRNodeWrapper image = mock(JCRNodeWrapper.class);
                 if (siteOf.containsKey(identifier)) {
+                    when(image.getPath()).thenReturn("/sites/" + siteOf.get(identifier) + "/files/" + identifier);
                     JCRSiteNode site = mock(JCRSiteNode.class);
                     when(site.getPath()).thenReturn("/sites/" + siteOf.get(identifier));
                     when(site.getSiteKey()).thenReturn(siteOf.get(identifier));

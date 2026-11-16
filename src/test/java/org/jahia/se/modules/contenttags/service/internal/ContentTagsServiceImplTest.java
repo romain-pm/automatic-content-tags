@@ -107,7 +107,9 @@ class ContentTagsServiceImplTest {
         assertEquals(ModelTier.VISION, request.tier());
         assertEquals(1, request.images().size());
         assertEquals("image/png", request.images().get(0).mediaType());
-        assertTrue(request.input().contains("exactly 2 relevant tags, in French, for this image"), request.input());
+        assertTrue(request.instructions().orElseThrow().startsWith("Generate exactly 2 relevant tags, in French."),
+                request.instructions().orElseThrow());
+        assertTrue(request.input().startsWith("Tag this image."), request.input());
         assertTrue(request.input().contains("cat.png"), request.input());
         assertTrue(request.input().contains("A grey cat"), "the text of the image goes with it");
     }
@@ -210,7 +212,9 @@ class ContentTagsServiceImplTest {
         assertEquals(Optional.of("digitall"), request.site());
         assertEquals(ResponseFormat.JSON, request.responseFormat());
         assertEquals(Optional.of(ContentTagsServiceImpl.TAGS_SCHEMA), request.jsonSchema());
-        assertTrue(request.instructions().isEmpty(), "no frame without editorial-frame");
+        String instructions = request.instructions().orElseThrow();
+        assertTrue(instructions.startsWith("Generate exactly 1 relevant tags, in English."), instructions);
+        assertFalse(instructions.contains(ContentTagsServiceImpl.FRAME_FORM), "no frame without editorial-frame");
     }
 
     @Test
@@ -222,7 +226,10 @@ class ContentTagsServiceImplTest {
 
         service.generateTags(article, "French", "fr", 1);
 
-        assertEquals(Optional.of("# Brand frame"), sent().instructions());
+        // The rules of the tags come first, then the frame, then the line that keeps their number and form.
+        String instructions = sent().instructions().orElseThrow();
+        assertTrue(instructions.startsWith("Generate exactly 1 relevant tags, in French."), instructions);
+        assertTrue(instructions.endsWith("\n\n# Brand frame\n\n" + ContentTagsServiceImpl.FRAME_FORM), instructions);
     }
 
     @Test
@@ -238,7 +245,8 @@ class ContentTagsServiceImplTest {
         service.generateTags(article, "German", null, 1);
 
         verify(service.frame).instructions(eq("digitall"), eq("de"), any());
-        assertTrue(sent().instructions().isEmpty(), "an empty frame adds no instructions");
+        assertFalse(sent().instructions().orElseThrow().contains(ContentTagsServiceImpl.FRAME_FORM),
+                "an empty frame adds nothing to the instructions");
     }
 
     @Test

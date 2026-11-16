@@ -451,30 +451,46 @@ class AltTextServiceImplTest {
 
     @Test
     void withoutEditorialFrameTheInstructionsAreThoseOfTheModule() throws Exception {
-        JCRNodeWrapper image = image("/modules/m/files/cat.png", null, true);
+        JCRNodeWrapper image = inSite(image("/sites/digitall/files/cat.png", null, true), "digitall");
         answer("A grey cat.");
 
         service.fillAltText(image, false, false, null);
 
-        CompletionRequest request = sent();
-        assertTrue(request.site().isEmpty(), "a node with no site under /sites names none");
-        assertEquals(Optional.of(AltTextServiceImpl.DEFAULT_INSTRUCTIONS), request.instructions());
+        assertEquals(Optional.of(AltTextServiceImpl.DEFAULT_INSTRUCTIONS), sent().instructions());
     }
 
     @Test
-    void aRefusedSiteEndsTheRunWithNoImageToResumeFrom() throws Exception {
-        JCRNodeWrapper folder = folder("/sites/s/files/album",
-                image("/sites/s/files/album/a.png", null, true),
-                image("/sites/s/files/album/b.png", null, true));
-        when(genAi.complete(any())).thenThrow(
-                new GenAiAccessDeniedException("s", "The permission 'genaiAccess' is required on the site 's'"));
+    void anImageOutsideSitesNamesNoSite() throws Exception {
+        // Jahia resolves a file of a user to systemsite, which is not its site.
+        JCRNodeWrapper image = inSite(image("/users/editor/files/cat.png", null, true), "systemsite");
+        answer("A grey cat.");
+
+        service.fillAltText(image, false, false, null);
+
+        assertTrue(sent().site().isEmpty());
+    }
+
+    @Test
+    void aRefusedSiteFailsItsImagesWithOneCallAndTheOtherSitesGoOn() throws Exception {
+        JCRNodeWrapper folder = folder("/sites",
+                inSite(image("/sites/s/files/a.png", null, true), "s"),
+                inSite(image("/sites/s/files/b.png", null, true), "s"),
+                inSite(image("/sites/t/files/c.png", null, true), "t"));
+        when(genAi.complete(any())).thenAnswer(invocation -> {
+            CompletionRequest request = invocation.getArgument(0);
+            if (request.site().equals(Optional.of("s"))) {
+                throw new GenAiAccessDeniedException("s", "The permission 'genaiAccess' is required on the site 's'");
+            }
+            return result("A photo.");
+        });
 
         AltTextReport report = service.fillAltText(folder, true, false, null);
 
-        assertEquals(1, report.count(Status.FAILED));
-        assertEquals("You may not use AI on the site s", report.images().get(0).message());
+        assertEquals(2, report.count(Status.FAILED));
+        assertEquals(1, report.count(Status.GENERATED));
+        assertEquals("You may not use AI on the site s", report.images().get(1).message());
         assertFalse(report.truncated());
-        verify(genAi, times(1)).complete(any());
+        verify(genAi, times(2)).complete(any());
     }
 
     @Test

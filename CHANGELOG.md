@@ -48,7 +48,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each call names the site of its node. genai-connector refuses a user without the permission
   `genaiAccess` on that site: the tagging action answers HTTP 403, and the dialog says so. A
   background run of alternative text stops for that site, with one log line, and goes on for the
-  images of another site.
+  images of another site. `generateImageAltText` fails the images of that site, with one call.
 - Brand frame: when the optional module editorial-frame runs, the tags and the alternative text
   follow the editorial frame of their site. The frame is in the language of the text. It holds the
   voice of the brand, the default persona, the writing rules and the glossary terms of that language.
@@ -60,6 +60,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   module no longer reads a comma-separated answer, and the default `llm.user.prompt` holds style
   guidance only.
 - The tag dialog also sends the code of the tag language, `tagLocale`, which selects the frame.
+- The number, the language and the style of the tags are now the instructions of a tag call, and the
+  content is its input. An answer with no JSON array, after the retries of genai-connector, answers
+  HTTP 502.
 - `generateImageAltText` stays for its callers and still writes within the request. Without
   `overwrite`, it now replaces the AI's own unreviewed text of a replaced image, and it writes the
   provenance. For a folder, `scheduleImageAltText` needs no `resumeFrom`.

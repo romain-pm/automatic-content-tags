@@ -146,8 +146,11 @@ export const AutoTagsDialog = ({
             });
 
             if (response.status === 403) {
-                setErrorMessage(t('automatic-content-tags:label.dialog.denied'));
-                return;
+                const refusal = await response.json().catch(() => ({}));
+                if (refusal.code === 'genaiAccess') {
+                    setErrorMessage(t('automatic-content-tags:label.dialog.denied'));
+                    return;
+                }
             }
 
             if (!response.ok) {

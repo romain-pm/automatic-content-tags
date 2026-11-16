@@ -138,8 +138,9 @@ second.
 
 > Tags are generated from the **saved** content of the node. Save first, then generate tags.
 
-The call asks genai-connector for a JSON array of strings, and genai-connector checks the answer. A
-user without `genaiAccess` on the site sees "You may not use AI on this site".
+The call asks genai-connector for a JSON array of strings, and genai-connector checks the answer. The
+number, the language and the style of the tags are the instructions of the call, and the content is
+its input. A user without `genaiAccess` on the site sees "You may not use AI on this site".
 
 For an image, the model receives the original file or a Jahia thumbnail, as for the alternative text
 below, with the file name and the saved text of the image. An image with no JPEG, PNG, GIF or WebP
@@ -206,9 +207,9 @@ mutation {
   of genai-connector, or when the AI provider is busy. It then returns `truncated: true` and a
   `resumeFrom` path. Call it again with that `resumeFrom` to continue. The images are visited in path
   order.
-- A call that genai-connector refuses for the site stops too. The failed image has the message "You
-  may not use AI on the site", followed by the site key. The call returns no `resumeFrom`, because the
-  next call would be refused as well.
+- genai-connector can refuse a call for the site of an image. The image then fails with the message
+  "You may not use AI on the site", followed by the site key. The other images of that site fail with
+  the same message and no call, and the images of another site go on.
 - `images` lists the generated and failed images. Ask `images(includeSkipped: true)` to also list
   the skipped ones; `skipped` counts them in both cases.
 
@@ -277,8 +278,9 @@ For example, a glossary of `digitall` says to write "jeton d'accès" for "access
 French alternative text of a screenshot of the login page then writes "jeton d'accès".
 
 - editorial-frame reads the live workspace, so a change of the frame applies once it is published.
-- The frame guides the words and the terms, never the form. A line after the frame repeats that an
-  alternative text is the text alone, and the tags stay a JSON array.
+- The frame guides the words and the terms, never the form. A line after the frame keeps the
+  alternative text alone, with no note. For the tags, the same line keeps their number, their language
+  and their form, and genai-connector checks that the answer is a JSON array.
 - A site with no frame, or a frame that cannot be read, gives a call with no frame, as without
   editorial-frame.
 - The frame makes each call longer. For example, a long brand voice can add up to 1,500 tokens to
@@ -293,7 +295,8 @@ French alternative text of a screenshot of the login page then writes "jeton d'a
   that user cannot edit (`jcr:write_default`).
 - Each call names the site of its node. genai-connector checks that the user of the call, or of the
   background job, holds `genaiAccess` on that site, before any provider call. A node outside
-  `/sites`, such as a file of a module, names no site, and genai-connector logs a warning for it.
+  `/sites`, such as a file of a user or of a module, names no site, and genai-connector logs a warning
+  for it. Jahia resolves such a node to `systemsite`, which the module does not send.
 - The CSRF guard whitelist covers only `*.generateContentTagsAction.do` and `*.contentTagsConfig.do`;
   `/modules/graphql` keeps its own protections.
 - Content text and image bytes go to the model of the configured genai-connector tier. Content text is

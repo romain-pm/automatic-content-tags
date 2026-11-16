@@ -61,6 +61,9 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     private static final String DEFAULT_PROMPT = "Write concise tags of one or two words, with no duplicates.";
     /** The answer of a tag call: a JSON array of strings, which genai-connector checks. */
     static final String TAGS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}";
+    /** The line after the editorial frame: the frame changes the words of the tags, never what the rules set. */
+    static final String FRAME_FORM = "The brand frame above guides the words and the terms of the tags, never their "
+            + "number, their language or their form: give the tags alone, with no explanation.";
     private static final int DEFAULT_MAX_TOKENS = 1024;
     private static final int DEFAULT_MAX_SOURCE_CHARS = 6000;
     private static final int DEFAULT_TAG_COUNT = 5;
@@ -125,20 +128,20 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
         // The count and language are authoritative here, so the configurable prompt only has to
         // carry style guidance (and must not hardcode a number).
-        String ask = "Generate exactly " + count + " relevant tags, in " + tagLanguage;
+        String rules = "Generate exactly " + count + " relevant tags, in " + tagLanguage + ". " + cfg.prompt();
         String site = site(node);
         CompletionRequest.Builder request = CompletionRequest.builder()
                 .site(site)
-                .instructions(frameText(site, frameLanguage(node, tagLocale), text))
+                .instructions(instructions(rules, frameText(site, frameLanguage(node, tagLocale), text)))
                 .jsonSchema(TAGS_SCHEMA)
                 .maxOutputTokens(cfg.maxTokens())
                 .temperature(cfg.temperature());
         if (picture.isPresent()) {
-            String prompt = ask + ", for this image. " + cfg.prompt() + " Its file name is \"" + node.getName() + "\"."
+            String prompt = "Tag this image. Its file name is \"" + node.getName() + "\"."
                     + (text.isEmpty() ? "" : " Its text: " + text);
             request.tier(ModelTier.VISION).input(prompt).images(List.of(picture.get()));
         } else {
-            request.tier(cfg.tier()).input(ask + ", for the following content. " + cfg.prompt() + " Content: " + text);
+            request.tier(cfg.tier()).input("Tag the following content. Content: " + text);
         }
         CompletionRequest built = request.build();
         LOGGER.debug("Requesting {} tags on tier '{}' for node {}", count, built.tier().id(), node.getPath());
@@ -171,6 +174,14 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         } catch (RepositoryException e) {
             return null;
         }
+    }
+
+    /** The instructions of the call: the rules of the tags, then the frame of the site and the line on its form. */
+    static String instructions(String rules, String frameText) {
+        if (frameText == null || frameText.isEmpty()) {
+            return rules;
+        }
+        return rules + "\n\n" + frameText.strip() + "\n\n" + FRAME_FORM;
     }
 
     /** The frame of the site in the tag language, or an empty text without editorial-frame. */

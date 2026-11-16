@@ -86,7 +86,7 @@ The module stores the AI answers and their provenance on the content. It stores 
 Standard content, pages, main-resource content and images (`jnt:content`, `jnt:page`, `jmix:mainResource`, `jmix:image`). The action is hidden on other node types and on sites where the module is not enabled.
 
 **Who may generate tags or alternative text?**
-An editor who holds the permission `genaiAccess` on the site. genai-connector checks the permission on each call, before it sends anything to the provider. An editor without the permission sees "You may not use AI on this site". A background job of that editor makes no call for that site.
+An editor who holds the permission `genaiAccess` on the site. genai-connector checks the permission on each call, before it sends anything to the provider. An editor without the permission sees "You may not use AI on this site". A background job of that editor stops at its first call for that site, which genai-connector refuses before anything reaches the provider.
 
 **Does it tag unsaved changes?**
 No. Tags are generated from the last saved version of the content. Save your edits first, then run Auto Tagging.

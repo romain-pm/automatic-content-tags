@@ -36,8 +36,8 @@ public interface AltTextService {
      * saved on its own, so the images done before a failure
      * keep their text. The images are visited in path order. An invocation makes at most
      * {@link #getMaxImages()} model calls, and makes no new call once it has run for {@code alt.max.seconds};
-     * the report then names the image to resume from. A call that genai-connector refuses for the site ends the
-     * invocation, with a failed result for that image and no image to resume from.</p>
+     * the report then names the image to resume from. When genai-connector refuses a call for its site, the image
+     * fails, and the other images of that site fail with no call; the images of another site go on.</p>
      *
      * @param node            the image or the folder, read through the calling user's session in the
      *                        target locale

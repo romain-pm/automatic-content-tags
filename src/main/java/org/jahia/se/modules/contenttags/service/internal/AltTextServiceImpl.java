@@ -32,11 +32,13 @@ import javax.jcr.RepositoryException;
 import javax.jcr.query.Query;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
@@ -106,9 +108,16 @@ public class AltTextServiceImpl implements AltTextService {
         if (resumeFrom != null) {
             images = images.tailMap(resumeFrom, true);
         }
+        // The sites on which genai-connector refused a call: their other images take no call.
+        Set<String> refused = new HashSet<>();
         for (JCRNodeWrapper listed : images.values()) {
             String path = listed.getPath();
             try {
+                String site = refused.isEmpty() ? null : RequestSite.of(listed);
+                if (site != null && refused.contains(site)) {
+                    results.add(refusedOn(path, site));
+                    continue;
+                }
                 Prepared prepared = prepareFresh(listed, overwrite, cfg);
                 if (prepared.result() != null) {
                     results.add(prepared.result());
@@ -121,11 +130,11 @@ public class AltTextServiceImpl implements AltTextService {
                 modelCalls++;
                 results.add(generate(prepared, overwrite, cfg));
             } catch (GenAiAccessDeniedException e) {
-                // The other images of the folder belong to the same site, and the next call would be refused too.
-                LOGGER.info("The alternative text of {} stops: {}", path, e.getMessage());
-                results.add(new AltTextResult(path, AltTextResult.Status.FAILED, null,
-                        "You may not use AI on the site " + e.site()));
-                return new AltTextReport(results, null);
+                if (refused.add(e.site())) {
+                    LOGGER.info("The alternative text stops for the site {}, from {}: {}", e.site(), path,
+                            e.getMessage());
+                }
+                results.add(refusedOn(path, e.site()));
             } catch (GenAiQuotaExceededException e) {
                 results.add(new AltTextResult(path, AltTextResult.Status.FAILED, null,
                         "The AI rate limit is reached, try again later"));
@@ -159,6 +168,10 @@ public class AltTextServiceImpl implements AltTextService {
         } catch (InvalidItemStateException e) {
             return prepare(reload(image), overwrite, cfg);
         }
+    }
+
+    private static AltTextResult refusedOn(String path, String site) {
+        return new AltTextResult(path, AltTextResult.Status.FAILED, null, "You may not use AI on the site " + site);
     }
 
     private static AltTextResult skipped(String path, String existing) {

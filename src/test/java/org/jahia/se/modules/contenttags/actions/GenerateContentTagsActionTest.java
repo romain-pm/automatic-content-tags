@@ -1,6 +1,8 @@
 package org.jahia.se.modules.contenttags.actions;
 
+import org.jahia.bin.ActionResult;
 import org.jahia.modules.genai.api.GenAiAccessDeniedException;
+import org.jahia.modules.genai.api.GenAiInvalidOutputException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.se.modules.contenttags.service.ContentTagsService;
 import org.jahia.services.content.JCRNodeWrapper;
@@ -57,7 +59,16 @@ class GenerateContentTagsActionTest {
     void aSiteWithoutAiAccessAnswers403() throws Exception {
         failWith(new GenAiAccessDeniedException("s", "The permission 'genaiAccess' is required on the site 's'"));
 
-        assertEquals(403, execute());
+        ActionResult result = action.tags(node, "English", "en", 0);
+        assertEquals(403, result.getResultCode());
+        assertEquals("genaiAccess", result.getJson().getString("code"));
+    }
+
+    @Test
+    void anAnswerWithNoJsonArrayAnswers502() throws Exception {
+        failWith(new GenAiInvalidOutputException("no JSON array", true));
+
+        assertEquals(502, execute());
     }
 
     @Test
