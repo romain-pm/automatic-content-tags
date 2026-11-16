@@ -136,6 +136,7 @@ export const AutoTagsDialog = ({
             const count = clampCount(tagCount, maxTags, defaultTags);
             const formData = new FormData();
             formData.append('tagLanguage', currentOption.label);
+            formData.append('tagLocale', currentOption.value);
             formData.append('numberOfTags', String(count));
 
             const response = await fetch(`${actionBase}.generateContentTagsAction.do`, {
@@ -143,6 +144,11 @@ export const AutoTagsDialog = ({
                 headers: {Accept: 'application/json'},
                 body: formData
             });
+
+            if (response.status === 403) {
+                setErrorMessage(t('automatic-content-tags:label.dialog.denied'));
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP error, status: ${response.status}`);

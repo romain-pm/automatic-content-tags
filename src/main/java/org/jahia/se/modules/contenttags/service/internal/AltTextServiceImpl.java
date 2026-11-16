@@ -2,6 +2,7 @@ package org.jahia.se.modules.contenttags.service.internal;
 
 import org.jahia.modules.genai.api.CompletionRequest;
 import org.jahia.modules.genai.api.CompletionResult;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
 import org.jahia.modules.genai.api.GenAiService;
@@ -9,6 +10,7 @@ import org.jahia.modules.genai.api.ImageInput;
 import org.jahia.modules.genai.api.ModelTier;
 import org.jahia.se.modules.contenttags.service.AltTextReport;
 import org.jahia.se.modules.contenttags.service.AltTextResult;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
 import org.jahia.se.modules.contenttags.service.AltTextService;
 import org.jahia.services.content.JCRContentUtils;
 import org.jahia.services.content.JCRNodeWrapper;
@@ -17,6 +19,9 @@ import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Modified;
 import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.component.annotations.ReferenceCardinality;
+import org.osgi.service.component.annotations.ReferencePolicy;
+import org.osgi.service.component.annotations.ReferencePolicyOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,6 +49,10 @@ import java.util.function.LongSupplier;
  * {@code alt.property} (default {@code jahia_ai_alt}), in the locale of the caller's session, with its provenance
  * ({@link AltTextProvenance}). It never opens a system session: an image the caller cannot read is not listed, and
  * an image the caller cannot edit is reported as failed before any model call.</p>
+ *
+ * <p>Each call names the site of the image, which genai-connector checks against the permission {@code genaiAccess}
+ * of the caller. When the module editorial-frame runs, the frame of that site in the language of the text follows the
+ * instructions: the voice of the brand, its writing rules and its glossary terms.</p>
  */
 @Component(service = AltTextService.class, configurationPid = ConfigValues.PID, immediate = true)
 public class AltTextServiceImpl implements AltTextService {
@@ -55,11 +64,20 @@ public class AltTextServiceImpl implements AltTextService {
             + "matters to understand it, in one short sentence. Do not start with \"Image of\", \"Picture of\" or "
             + "\"Photo of\". Do not use quotes, markdown or emoji. Reply with the alternative text only.";
 
+    /** The line after the editorial frame: the frame changes the words of the text, never its form. */
+    static final String FRAME_FORM = "The brand frame above guides the words and the terms of the alternative text, "
+            + "never its form: reply with the alternative text alone, with no explanation, no note and no placeholder.";
+
     private static final String WRITE_PERMISSION = "jcr:write_default";
 
     // Package-private for the unit tests, which inject a mock.
     @Reference
     GenAiService genAi;
+
+    // Optional: without the module editorial-frame, no frame applies. Package-private for the unit tests.
+    @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
+            policyOption = ReferencePolicyOption.GREEDY)
+    volatile BrandFrame frame;
 
     // Package-private for the unit tests, which move the clock.
     LongSupplier nanoTime = System::nanoTime;
@@ -102,6 +120,12 @@ public class AltTextServiceImpl implements AltTextService {
                 }
                 modelCalls++;
                 results.add(generate(prepared, overwrite, cfg));
+            } catch (GenAiAccessDeniedException e) {
+                // The other images of the folder belong to the same site, and the next call would be refused too.
+                LOGGER.info("The alternative text of {} stops: {}", path, e.getMessage());
+                results.add(new AltTextResult(path, AltTextResult.Status.FAILED, null,
+                        "You may not use AI on the site " + e.site()));
+                return new AltTextReport(results, null);
             } catch (GenAiQuotaExceededException e) {
                 results.add(new AltTextResult(path, AltTextResult.Status.FAILED, null,
                         "The AI rate limit is reached, try again later"));
@@ -256,11 +280,14 @@ public class AltTextServiceImpl implements AltTextService {
         JCRNodeWrapper image = prepared.image();
         String path = image.getPath();
         String existing = prepared.existing();
+        String site = RequestSite.of(image);
+        Locale locale = image.getSession().getLocale();
         CompletionResult result;
         try {
             result = genAi.complete(CompletionRequest.builder()
                     .tier(ModelTier.VISION)
-                    .instructions(cfg.instructions())
+                    .site(site)
+                    .instructions(instructions(cfg.instructions(), frameText(site, locale, prepared.prompt())))
                     .input(prepared.prompt())
                     .images(List.of(prepared.picture()))
                     .maxOutputTokens(cfg.maxTokens())
@@ -308,6 +335,20 @@ public class AltTextServiceImpl implements AltTextService {
         LOGGER.debug("Saved an alternative text of {} characters on {} (model {})", altText.length(), path,
                 result.model());
         return new AltTextResult(path, AltTextResult.Status.GENERATED, altText, null);
+    }
+
+    /** The frame of the site in the language of the text, or an empty text without editorial-frame. */
+    private String frameText(String site, Locale locale, String text) {
+        BrandFrame current = frame;
+        return current == null || locale == null ? "" : current.instructions(site, locale.toString(), text);
+    }
+
+    /** The instructions of the call: those of the module, then the frame of the site and the line on its form. */
+    static String instructions(String instructions, String frameText) {
+        if (frameText == null || frameText.isEmpty()) {
+            return instructions;
+        }
+        return instructions + "\n\n" + frameText.strip() + "\n\n" + FRAME_FORM;
     }
 
     /** The user turn: the target language and length, plus the names that can help identify the subject. */

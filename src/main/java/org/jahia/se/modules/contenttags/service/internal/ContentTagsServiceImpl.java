@@ -5,6 +5,7 @@ import org.jahia.modules.genai.api.CompletionResult;
 import org.jahia.modules.genai.api.GenAiService;
 import org.jahia.modules.genai.api.ImageInput;
 import org.jahia.modules.genai.api.ModelTier;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
 import org.jahia.se.modules.contenttags.service.AltTextService;
 import org.jahia.se.modules.contenttags.service.ContentTagsService;
 import org.jahia.se.modules.contenttags.service.TagTarget;
@@ -15,6 +16,9 @@ import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Modified;
 import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.component.annotations.ReferenceCardinality;
+import org.osgi.service.component.annotations.ReferencePolicy;
+import org.osgi.service.component.annotations.ReferencePolicyOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +29,7 @@ import javax.jcr.RepositoryException;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -38,6 +43,11 @@ import java.util.Set;
  * on the tier {@code vision}, so its tags describe what it shows. The operator chooses the provider,
  * the model and the key of each tier in the genai-connector configuration, never here.</p>
  *
+ * <p>Each call names the site of the node, which genai-connector checks against the permission
+ * {@code genaiAccess} of the caller, and asks for a JSON array of strings, which genai-connector checks.
+ * When the module editorial-frame runs, the frame of that site in the tag language is the instructions of
+ * the call: the voice of the brand, its writing rules and its glossary terms.</p>
+ *
  * <p>Configuration is bound to PID {@code org.jahia.se.modules.contenttags}; the parsed snapshot is
  * held in an immutable {@link Config} record swapped atomically, so concurrent calls are safe.</p>
  */
@@ -46,10 +56,11 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ContentTagsServiceImpl.class);
 
-    // Style-only guidance; the tag count and language are injected authoritatively by the service.
-    private static final String DEFAULT_PROMPT =
-            "Respond ONLY with a JSON array of concise single- or two-word strings, "
-                    + "without markdown, explanations or duplicates.";
+    // Style-only guidance; the tag count and language are injected authoritatively by the service, and
+    // genai-connector asks for the JSON array of TAGS_SCHEMA.
+    private static final String DEFAULT_PROMPT = "Write concise tags of one or two words, with no duplicates.";
+    /** The answer of a tag call: a JSON array of strings, which genai-connector checks. */
+    static final String TAGS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}";
     private static final int DEFAULT_MAX_TOKENS = 1024;
     private static final int DEFAULT_MAX_SOURCE_CHARS = 6000;
     private static final int DEFAULT_TAG_COUNT = 5;
@@ -65,6 +76,11 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     // Package-private for the unit tests, which inject a mock.
     @Reference
     GenAiService genAi;
+
+    // Optional: without the module editorial-frame, no frame applies. Package-private for the unit tests.
+    @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
+            policyOption = ReferencePolicyOption.GREEDY)
+    volatile BrandFrame frame;
 
     private volatile Config config = Config.from(ConfigValues.of(Map.of()));
 
@@ -96,7 +112,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     }
 
     @Override
-    public List<String> generateTags(JCRNodeWrapper node, String tagLanguage, int numberOfTags) {
+    public List<String> generateTags(JCRNodeWrapper node, String tagLanguage, String tagLocale, int numberOfTags) {
         Config cfg = config;
         int count = clampCount(numberOfTags, cfg.tagCountDefault(), cfg.tagCountMax());
 
@@ -110,7 +126,11 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         // The count and language are authoritative here, so the configurable prompt only has to
         // carry style guidance (and must not hardcode a number).
         String ask = "Generate exactly " + count + " relevant tags, in " + tagLanguage;
+        String site = site(node);
         CompletionRequest.Builder request = CompletionRequest.builder()
+                .site(site)
+                .instructions(frameText(site, frameLanguage(node, tagLocale), text))
+                .jsonSchema(TAGS_SCHEMA)
                 .maxOutputTokens(cfg.maxTokens())
                 .temperature(cfg.temperature());
         if (picture.isPresent()) {
@@ -126,6 +146,37 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         List<String> tags = TagResponseParser.parse(result.text(), count);
         LOGGER.debug("Model {} returned {} tags for node {}", result.model(), tags.size(), node.getPath());
         return tags;
+    }
+
+    /** The site of the node. A site that cannot be read fails the call, because a call with no site skips the check. */
+    private static String site(JCRNodeWrapper node) {
+        try {
+            return RequestSite.of(node);
+        } catch (RepositoryException e) {
+            throw new IllegalStateException("Unable to read the site of " + node.getPath(), e);
+        }
+    }
+
+    /**
+     * The tag language code of the request, else the language of the session that read the node; {@code null}, and
+     * so no frame, when neither is known.
+     */
+    private static String frameLanguage(JCRNodeWrapper node, String tagLocale) {
+        if (tagLocale != null && !tagLocale.isBlank()) {
+            return tagLocale.trim();
+        }
+        try {
+            Locale locale = node.getSession() == null ? null : node.getSession().getLocale();
+            return locale == null ? null : locale.toString();
+        } catch (RepositoryException e) {
+            return null;
+        }
+    }
+
+    /** The frame of the site in the tag language, or an empty text without editorial-frame. */
+    private String frameText(String site, String language, String text) {
+        BrandFrame current = frame;
+        return current == null || language == null ? "" : current.instructions(site, language, text);
     }
 
     @Override

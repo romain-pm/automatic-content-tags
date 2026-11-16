@@ -2,50 +2,46 @@ package org.jahia.se.modules.contenttags.service.internal;
 
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Parses the raw LLM response into a tag list.
+ * Reads the tags out of the answer of a tag call.
  *
- * <p>The prompt asks for a JSON array of strings; models occasionally wrap it in a
- * markdown code fence or fall back to comma-separated text, so both are tolerated.</p>
+ * <p>The call sends {@link ContentTagsServiceImpl#TAGS_SCHEMA}, so genai-connector returns one JSON array, with no
+ * Markdown fence and no prose around it, or throws. Only the array is read.</p>
  */
 final class TagResponseParser {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(TagResponseParser.class);
     private static final int MAX_TAG_LENGTH = 64;
 
     private TagResponseParser() {
     }
 
     /**
-     * @param rawResponse the raw assistant text
-     * @param maxTags     the maximum number of tags to keep (the model may over-generate)
-     * @return the extracted tags, deduplicated, length-capped and limited to {@code maxTags};
-     *         empty when nothing parses
+     * @param json    the text of the answer, a JSON array
+     * @param maxTags the maximum number of tags to keep (the model may over-generate)
+     * @return the tags, deduplicated, length-capped and limited to {@code maxTags}; empty when the text is not a
+     *         JSON array
      */
-    static List<String> parse(String rawResponse, int maxTags) {
-        if (rawResponse == null || rawResponse.isBlank()) {
+    static List<String> parse(String json, int maxTags) {
+        if (json == null || json.isBlank()) {
             return List.of();
         }
-        String cleaned = rawResponse
-                .replaceAll("(?s)```(?:json)?\\s*", "")
-                .replaceAll("\\s*```", "")
-                .trim();
-
-        List<String> tags = new ArrayList<>();
+        JSONArray array;
         try {
-            JSONArray array = new JSONArray(cleaned);
-            for (int i = 0; i < array.length(); i++) {
-                addTag(tags, array.optString(i, ""), maxTags);
-            }
+            array = new JSONArray(json.trim());
         } catch (JSONException e) {
-            // Fall back to comma-separated text
-            for (String candidate : cleaned.split(",")) {
-                String tag = candidate.replaceAll("^[\\[\"\\s]+|[\\]\"\\s]+$", "");
-                addTag(tags, tag, maxTags);
-            }
+            LOGGER.warn("The answer of a tag call is not a JSON array, so it gives no tags");
+            return List.of();
+        }
+        List<String> tags = new ArrayList<>();
+        for (int i = 0; i < array.length(); i++) {
+            addTag(tags, array.optString(i, ""), maxTags);
         }
         return tags;
     }

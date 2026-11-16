@@ -45,10 +45,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   property name; a single-valued tag property receives the tags joined with ", ".
 - Configuration key `llm.tier`, the genai-connector tier of the tags of a content from its text
   (default `lite`).
+- Each call names the site of its node. genai-connector refuses a user without the permission
+  `genaiAccess` on that site: the tagging action answers HTTP 403, and the dialog says so. A
+  background run of alternative text stops for that site, with one log line, and goes on for the
+  images of another site.
+- Brand frame: when the optional module editorial-frame runs, the tags and the alternative text
+  follow the editorial frame of their site. The frame is in the language of the text. It holds the
+  voice of the brand, the default persona, the writing rules and the glossary terms of that language.
 - Unit tests (JUnit 5, Mockito).
 
 ### Changed
 - The alternative text and its provenance no longer feed the tags of an image.
+- A tag call asks genai-connector for a JSON array of strings, which genai-connector checks. The
+  module no longer reads a comma-separated answer, and the default `llm.user.prompt` holds style
+  guidance only.
+- The tag dialog also sends the code of the tag language, `tagLocale`, which selects the frame.
 - `generateImageAltText` stays for its callers and still writes within the request. Without
   `overwrite`, it now replaces the AI's own unreviewed text of a replaced image, and it writes the
   provenance. For a folder, `scheduleImageAltText` needs no `resumeFrom`.

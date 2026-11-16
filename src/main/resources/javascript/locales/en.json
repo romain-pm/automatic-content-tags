@@ -15,6 +15,7 @@
             "generating": "Generating tags…",
             "noTags": "No tags could be generated for this content. Note that only saved content is analysed.",
             "error": "Tag generation failed. Check the server log for details.",
+            "denied": "You may not use AI on this site. Ask an administrator for the permission genaiAccess.",
             "targetError": "The tag property configured for this module cannot hold tags on this content. Ask an administrator to check llm.tag.property and llm.tag.mixin."
         }
     }

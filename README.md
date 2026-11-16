@@ -10,7 +10,9 @@ This module uses AI to write two kinds of metadata in Jahia:
 
 The module reaches its models through [genai-connector](https://github.com/Jahia/genai-connector).
 It holds no provider, model or API key of its own: the operator configures them once, in
-genai-connector, for the whole platform.
+genai-connector, for the whole platform. When the module
+[editorial-frame](https://github.com/Jahia/ai-editorial-frame) runs, each call also follows the
+editorial frame of its site. The frame holds the voice of the brand, its rules and its glossary.
 
 Compatible with Jahia 8.2 (genai-connector requires 8.2.2). Requires Java 17 to build.
 
@@ -21,7 +23,12 @@ Compatible with Jahia 8.2 (genai-connector requires 8.2.2). Requires Java 17 to 
   text, and the tags of an image. The tags of other content use `llm.tier` (`lite` by default).
 - The model of `vision` must accept images. With no `vision.*` key, genai-connector uses its shared
   model for `vision`; the shipped `mistral/mistral-small-latest` accepts images.
+- The permission `genaiAccess` on the site, for each user who generates tags or alternative text.
+  Each call names the site of its node, and genai-connector refuses a user without that permission
+  on that site. genai-connector grants `genaiAccess` to its editorial roles.
 - `graphql-dxm-provider`, which every Jahia 8.2 ships.
+- Optional: [editorial-frame](https://github.com/Jahia/ai-editorial-frame), for the
+  [brand frame](#brand-frame). Without it, the module works as before.
 
 ## Features
 
@@ -40,14 +47,17 @@ Compatible with Jahia 8.2 (genai-connector requires 8.2.2). Requires Java 17 to 
   changed or reviewed the current one.
 - **Configurable targets**: the property and mixin that receive the alternative text and the tags come
   from the configuration (`alt.property`, `alt.mixin`, `llm.tag.property`, `llm.tag.mixin`).
-- **One AI configuration**: provider, model and key come from genai-connector, which also applies
-  the per-user rate limit, retries and the audit log.
+- **One AI configuration**: provider, model and key come from genai-connector. genai-connector also
+  applies the access check on the site, the per-user rate limit, retries and the audit log.
+- **Brand frame**: with the module editorial-frame, the tags and the alternative text follow the
+  voice, the writing rules and the glossary of their site.
 
 ## Architecture
 
 ```
 src/main/java/org/jahia/se/modules/contenttags/
 ├── actions/                       # POST-only render actions of the tagging dialog (CSRF-whitelisted)
+├── frame/                         # The optional bridge to the module editorial-frame
 ├── graphql/                       # Mutations scheduleImageAltText and generateImageAltText, result types
 ├── service/ContentTagsService     # Tag generation
 ├── service/AltTextService         # Alternative text generation
@@ -60,14 +70,16 @@ src/javascript/                                # React 18 UI extension (Module F
 
 ## Installation
 
-1. Maven resolves genai-connector `0.1.0-SNAPSHOT` from the Jahia public Nexus, where the `main`
-   branch of genai-connector publishes it.
+1. Maven resolves genai-connector `0.1.0-SNAPSHOT` and editorial-frame `0.1.0-SNAPSHOT` from the
+   Jahia public Nexus, where the `main` branch of each module publishes it.
 2. Build the module:
    ```bash
    mvn clean install
    ```
 3. Deploy genai-connector, then `target/automatic-content-tags-<version>.jar`, to your Jahia
-   instance (module management UI or `digital-factory-data/modules`).
+   instance (module management UI or `digital-factory-data/modules`). Deploy editorial-frame before
+   this module to use the brand frame. A module that starts after this one needs a restart of this
+   module, because Jahia wires an optional dependency when the module starts.
 4. Configure genai-connector (`org.jahia.modules.genai.cfg`): a model for the `lite` tier, and a
    model that reads images for the `vision` tier. For example, `vision.model=mistral/mistral-medium-latest`
    sends the image calls to a larger gateway model. See the genai-connector README.
@@ -126,6 +138,9 @@ second.
 
 > Tags are generated from the **saved** content of the node. Save first, then generate tags.
 
+The call asks genai-connector for a JSON array of strings, and genai-connector checks the answer. A
+user without `genaiAccess` on the site sees "You may not use AI on this site".
+
 For an image, the model receives the original file or a Jahia thumbnail, as for the alternative text
 below, with the file name and the saved text of the image. An image with no JPEG, PNG, GIF or WebP
 rendition is tagged from its text only, on `llm.tier`.
@@ -152,6 +167,9 @@ mutation {
 
 - The mutation lists the images, schedules the run and returns at once. It answers an error when
   genai-connector has no model for the tier `vision`.
+- genai-connector refuses each call of a user without `genaiAccess` on the site of the image. The
+  run then stops for that site, with one line in the server log, and makes no call for the other
+  images of that site. The images of another site go on.
 - Jahia background jobs write the texts as the calling user. Jahia runs its persistent jobs,
   publications included, on one thread. So each job makes no new model call after 20 seconds, and a
   new job takes the images left. A publication requested meanwhile runs between two jobs.
@@ -188,6 +206,9 @@ mutation {
   of genai-connector, or when the AI provider is busy. It then returns `truncated: true` and a
   `resumeFrom` path. Call it again with that `resumeFrom` to continue. The images are visited in path
   order.
+- A call that genai-connector refuses for the site stops too. The failed image has the message "You
+  may not use AI on the site", followed by the site key. The call returns no `resumeFrom`, because the
+  next call would be refused as well.
 - `images` lists the generated and failed images. Ask `images(includeSkipped: true)` to also list
   the skipped ones; `skipped` counts them in both cases.
 
@@ -233,10 +254,35 @@ also holds the SHA-256 digests of the text and of the picture that the model saw
 - The prompt also holds the file name and the `jcr:title` of the image, which help the model name the
   subject. An editor writes both, so they can hold instructions to the model. The answer is cleaned to
   one line of plain text and cut at `alt.max.length`, so it cannot add markup to a page.
+- The instructions of the call are those of the module, or of `alt.prompt`, then the
+  [brand frame](#brand-frame) of the site in the language of the text.
 - Read the text back with `property(name: "jahia_ai_alt", language: "en")`, or edit it in the Content
   Editor, where it shows as the "AI alternative text" field of an image.
 - The alternative text and its provenance never feed the tags. The tags of an image come from its
   picture, its file name and its other text.
+
+### Brand frame
+
+When the module editorial-frame runs, each call carries the editorial frame of its site, after the
+instructions of the module. The frame is in the language of the text that the model writes. For an
+alternative text, it is the language of the text, and for tags, the tag language of the dialog.
+editorial-frame builds the frame text, within its default budget of 1,500 tokens:
+
+- the voice of the brand, for the group and for the site;
+- the default persona of the site, and the names of the others;
+- the writing rules of that language;
+- the glossary terms translated into that language.
+
+For example, a glossary of `digitall` says to write "jeton d'accès" for "access token" in French. A
+French alternative text of a screenshot of the login page then writes "jeton d'accès".
+
+- editorial-frame reads the live workspace, so a change of the frame applies once it is published.
+- The frame guides the words and the terms, never the form. A line after the frame repeats that an
+  alternative text is the text alone, and the tags stay a JSON array.
+- A site with no frame, or a frame that cannot be read, gives a call with no frame, as without
+  editorial-frame.
+- The frame makes each call longer. For example, a long brand voice can add up to 1,500 tokens to
+  each image of a run, in each language.
 
 ## Security notes
 
@@ -245,10 +291,14 @@ also holds the SHA-256 digests of the text and of the picture that the model saw
 - The mutations refuse the guest user and list only the images that the caller can read. A background
   job runs as the user who scheduled it or uploaded the image. It makes no model call for an image
   that user cannot edit (`jcr:write_default`).
+- Each call names the site of its node. genai-connector checks that the user of the call, or of the
+  background job, holds `genaiAccess` on that site, before any provider call. A node outside
+  `/sites`, such as a file of a module, names no site, and genai-connector logs a warning for it.
 - The CSRF guard whitelist covers only `*.generateContentTagsAction.do` and `*.contentTagsConfig.do`;
   `/modules/graphql` keeps its own protections.
 - Content text and image bytes go to the model of the configured genai-connector tier. Content text is
   truncated to `llm.max.source.chars`; the model answer is stored as plain text, without markup.
+- The brand frame of the site goes to the same model, in the instructions of the call.
 
 ## Development
 

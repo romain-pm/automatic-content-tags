@@ -1,5 +1,6 @@
 package org.jahia.se.modules.contenttags.service.internal;
 
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiNotConfiguredException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
@@ -20,6 +21,7 @@ import org.quartz.JobDetail;
 
 import javax.jcr.ItemNotFoundException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +60,8 @@ class AltTextJobServiceImplTest {
     /** The images the batch opened, as "identifier/language". */
     private final List<String> opened = new ArrayList<>();
     private final Set<String> gone = new LinkedHashSet<>();
+    /** The site key of an image, by identifier; an image with none has no site. */
+    private final Map<String, String> siteOf = new HashMap<>();
     private final AtomicLong clock = new AtomicLong();
     private AltTextJobServiceImpl service;
 
@@ -78,7 +82,18 @@ class AltTextJobServiceImplTest {
                     throw new ItemNotFoundException(identifier);
                 }
                 opened.add(identifier + "/" + language);
-                return mock(JCRNodeWrapper.class);
+                JCRNodeWrapper image = mock(JCRNodeWrapper.class);
+                if (siteOf.containsKey(identifier)) {
+                    JCRSiteNode site = mock(JCRSiteNode.class);
+                    when(site.getPath()).thenReturn("/sites/" + siteOf.get(identifier));
+                    when(site.getSiteKey()).thenReturn(siteOf.get(identifier));
+                    try {
+                        when(image.getResolveSite()).thenReturn(site);
+                    } catch (javax.jcr.RepositoryException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+                return image;
             }
         };
         service.altTextService = altText;
@@ -262,13 +277,61 @@ class AltTextJobServiceImplTest {
         assertTrue(scheduled.isEmpty());
     }
 
+    @Test
+    void aRefusedSiteStopsTheRunForThatSiteAndTheOtherSitesGoOn() throws Exception {
+        siteOf.putAll(Map.of("img0", "a", "img1", "a", "img2", "b"));
+        refuseSite("a");
+
+        service.runBatch(data(images(3), List.of("en", "fr"), false, 0));
+
+        // The second image of the refused site takes no model call.
+        assertEquals(List.of("img0/en", "img1/en", "img2/en", "img2/fr"), opened);
+        verify(altText, times(3)).fillImage(any(), anyBoolean());
+        assertTrue(scheduled.isEmpty());
+    }
+
+    @Test
+    void theNextJobOfTheRunKeepsTheRefusedSites() throws Exception {
+        siteOf.putAll(Map.of("img0", "a", "img1", "b", "img2", "a"));
+        when(altText.fillImage(any(), anyBoolean())).thenAnswer(invocation -> {
+            String site = RequestSite.of(invocation.getArgument(0));
+            if ("a".equals(site)) {
+                throw new GenAiAccessDeniedException(site, "The permission 'genaiAccess' is required on the site 'a'");
+            }
+            throw new GenAiQuotaExceededException("limit");
+        });
+
+        service.runBatch(data(images(3), List.of("en"), false, 0));
+
+        Scheduled retry = scheduled.get(0);
+        assertEquals(List.of("img1", "img2"), retry.data().get(AltTextJobServiceImpl.IDENTIFIERS));
+        assertEquals(List.of("a"), retry.data().get(AltTextJobServiceImpl.DENIED_SITES));
+
+        opened.clear();
+        doReturn(result(AltTextResult.Status.GENERATED)).when(altText).fillImage(any(), anyBoolean());
+        service.runBatch(retry.data());
+        assertEquals(List.of("img1/en", "img2/en"), opened);
+        verify(altText, times(3)).fillImage(any(), anyBoolean());
+    }
+
+    private void refuseSite(String refused) throws Exception {
+        when(altText.fillImage(any(), anyBoolean())).thenAnswer(invocation -> {
+            String site = RequestSite.of(invocation.getArgument(0));
+            if (refused.equals(site)) {
+                throw new GenAiAccessDeniedException(site, "The permission 'genaiAccess' is required on the site '"
+                        + site + "'");
+            }
+            return result(AltTextResult.Status.GENERATED);
+        });
+    }
+
     private static List<String> images(int count) {
         return IntStream.range(0, count).mapToObj(i -> "img" + i).toList();
     }
 
     private static JobDataMap data(List<String> identifiers, List<String> languages, boolean overwrite, int retries) {
         return new AltTextJobServiceImpl.Work("run1", "/users/editor", identifiers, languages, languages, overwrite,
-                retries, false).toJob().getJobDataMap();
+                retries, false, List.of()).toJob().getJobDataMap();
     }
 
     private static AltTextResult result(AltTextResult.Status status) {

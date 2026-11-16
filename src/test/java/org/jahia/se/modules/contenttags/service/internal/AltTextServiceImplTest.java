@@ -2,6 +2,7 @@ package org.jahia.se.modules.contenttags.service.internal;
 
 import org.jahia.modules.genai.api.CompletionRequest;
 import org.jahia.modules.genai.api.CompletionResult;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiNotConfiguredException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
@@ -9,6 +10,7 @@ import org.jahia.modules.genai.api.GenAiService;
 import org.jahia.modules.genai.api.ModelTier;
 import org.jahia.modules.genai.api.StopReason;
 import org.jahia.modules.genai.api.Usage;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
 import org.jahia.se.modules.contenttags.service.AltTextReport;
 import org.jahia.se.modules.contenttags.service.AltTextResult;
 import org.jahia.se.modules.contenttags.service.AltTextResult.Status;
@@ -17,6 +19,7 @@ import org.jahia.services.content.JCRNodeIteratorWrapper;
 import org.jahia.services.content.JCRNodeWrapper;
 import org.jahia.services.content.JCRPropertyWrapper;
 import org.jahia.services.content.JCRSessionWrapper;
+import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.content.nodetypes.ExtendedPropertyDefinition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -429,6 +432,71 @@ class AltTextServiceImplTest {
 
         assertEquals(1, report.count(Status.FAILED));
         assertEquals(1, report.count(Status.GENERATED));
+    }
+
+    @Test
+    void aCallNamesTheSiteOfTheImageAndTheFrameFollowsTheInstructions() throws Exception {
+        JCRNodeWrapper image = inSite(image("/sites/digitall/files/cat.png", null, true), "digitall");
+        service.frame = mock(BrandFrame.class);
+        when(service.frame.instructions(eq("digitall"), eq("fr"), any())).thenReturn("# Brand frame\nWrite Jahia.\n");
+        answer("Un chat gris.");
+
+        service.fillAltText(image, false, false, null);
+
+        CompletionRequest request = sent();
+        assertEquals(Optional.of("digitall"), request.site());
+        assertEquals(Optional.of(AltTextServiceImpl.DEFAULT_INSTRUCTIONS + "\n\n# Brand frame\nWrite Jahia.\n\n"
+                + AltTextServiceImpl.FRAME_FORM), request.instructions());
+    }
+
+    @Test
+    void withoutEditorialFrameTheInstructionsAreThoseOfTheModule() throws Exception {
+        JCRNodeWrapper image = image("/modules/m/files/cat.png", null, true);
+        answer("A grey cat.");
+
+        service.fillAltText(image, false, false, null);
+
+        CompletionRequest request = sent();
+        assertTrue(request.site().isEmpty(), "a node with no site under /sites names none");
+        assertEquals(Optional.of(AltTextServiceImpl.DEFAULT_INSTRUCTIONS), request.instructions());
+    }
+
+    @Test
+    void aRefusedSiteEndsTheRunWithNoImageToResumeFrom() throws Exception {
+        JCRNodeWrapper folder = folder("/sites/s/files/album",
+                image("/sites/s/files/album/a.png", null, true),
+                image("/sites/s/files/album/b.png", null, true));
+        when(genAi.complete(any())).thenThrow(
+                new GenAiAccessDeniedException("s", "The permission 'genaiAccess' is required on the site 's'"));
+
+        AltTextReport report = service.fillAltText(folder, true, false, null);
+
+        assertEquals(1, report.count(Status.FAILED));
+        assertEquals("You may not use AI on the site s", report.images().get(0).message());
+        assertFalse(report.truncated());
+        verify(genAi, times(1)).complete(any());
+    }
+
+    @Test
+    void aRefusedSiteIsAnErrorOfOneImage() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", null, true);
+        when(genAi.complete(any())).thenThrow(new GenAiAccessDeniedException("s", "refused"));
+
+        assertThrows(GenAiAccessDeniedException.class, () -> service.fillImage(image, false));
+    }
+
+    private CompletionRequest sent() {
+        ArgumentCaptor<CompletionRequest> request = ArgumentCaptor.forClass(CompletionRequest.class);
+        verify(genAi).complete(request.capture());
+        return request.getValue();
+    }
+
+    private static JCRNodeWrapper inSite(JCRNodeWrapper node, String siteKey) throws Exception {
+        JCRSiteNode site = mock(JCRSiteNode.class);
+        when(site.getPath()).thenReturn("/sites/" + siteKey);
+        when(site.getSiteKey()).thenReturn(siteKey);
+        when(node.getResolveSite()).thenReturn(site);
+        return node;
     }
 
     @Test

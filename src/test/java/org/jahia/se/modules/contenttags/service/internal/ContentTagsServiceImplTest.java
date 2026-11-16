@@ -4,10 +4,14 @@ import org.jahia.modules.genai.api.CompletionRequest;
 import org.jahia.modules.genai.api.CompletionResult;
 import org.jahia.modules.genai.api.GenAiService;
 import org.jahia.modules.genai.api.ModelTier;
+import org.jahia.modules.genai.api.ResponseFormat;
 import org.jahia.modules.genai.api.StopReason;
 import org.jahia.modules.genai.api.Usage;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
 import org.jahia.se.modules.contenttags.service.TagTarget;
 import org.jahia.services.content.JCRNodeWrapper;
+import org.jahia.services.content.JCRSessionWrapper;
+import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.content.nodetypes.ExtendedNodeType;
 import org.jahia.services.content.nodetypes.ExtendedPropertyDefinition;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +23,7 @@ import javax.jcr.PropertyIterator;
 import javax.jcr.PropertyType;
 import javax.jcr.Value;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -26,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -95,7 +101,7 @@ class ContentTagsServiceImplTest {
         ImagePayloadTest.resource(image, "jcr:content", "image/png", new byte[] {1, 2, 3});
         answer("[\"cat\", \"sofa\"]");
 
-        assertEquals(List.of("cat", "sofa"), service.generateTags(image, "French", 2));
+        assertEquals(List.of("cat", "sofa"), service.generateTags(image, "French", "fr", 2));
 
         CompletionRequest request = sent();
         assertEquals(ModelTier.VISION, request.tier());
@@ -113,7 +119,7 @@ class ContentTagsServiceImplTest {
         ImagePayloadTest.resource(image, "jcr:content", "image/jpeg", new byte[] {1, 2, 3});
         answer("[\"cat\"]");
 
-        assertEquals(List.of("cat"), service.generateTags(image, "English", 1));
+        assertEquals(List.of("cat"), service.generateTags(image, "English", "en", 1));
         assertEquals(ModelTier.VISION, sent().tier());
     }
 
@@ -123,7 +129,7 @@ class ContentTagsServiceImplTest {
         JCRNodeWrapper article = node("news", "Jahia ships a vision tier");
         answer("[\"jahia\"]");
 
-        assertEquals(List.of("jahia"), service.generateTags(article, "English", 1));
+        assertEquals(List.of("jahia"), service.generateTags(article, "English", "en", 1));
 
         CompletionRequest request = sent();
         assertEquals(ModelTier.BALANCED, request.tier());
@@ -138,7 +144,7 @@ class ContentTagsServiceImplTest {
         ImagePayloadTest.resource(image, "jcr:content", "image/tiff", new byte[] {1, 2, 3});
         answer("[\"invoice\"]");
 
-        assertEquals(List.of("invoice"), service.generateTags(image, "English", 1));
+        assertEquals(List.of("invoice"), service.generateTags(image, "English", "en", 1));
 
         assertEquals(ModelTier.LITE, sent().tier());
         assertTrue(sent().images().isEmpty());
@@ -146,7 +152,7 @@ class ContentTagsServiceImplTest {
 
     @Test
     void aNodeWithNoTextAndNoPictureCostsNoModelCall() throws Exception {
-        assertTrue(service.generateTags(node("empty", null), "English", 5).isEmpty());
+        assertTrue(service.generateTags(node("empty", null), "English", "en", 5).isEmpty());
         verify(service.genAi, never()).complete(any());
     }
 
@@ -155,7 +161,7 @@ class ContentTagsServiceImplTest {
         service.configure(Map.of("alt.property", "jcr:description"));
         answer("[\"sunset\"]");
 
-        service.generateTags(withAltText(true), "English", 1);
+        service.generateTags(withAltText(true), "English", "en", 1);
 
         String input = sent().input();
         assertTrue(input.contains("Sunset over the bay"));
@@ -168,7 +174,7 @@ class ContentTagsServiceImplTest {
         service.configure(Map.of("alt.property", "jcr:description"));
         answer("[\"sunset\"]");
 
-        service.generateTags(withAltText(false), "English", 1);
+        service.generateTags(withAltText(false), "English", "en", 1);
 
         String input = sent().input();
         assertTrue(input.contains("AI wrote that"));
@@ -190,6 +196,63 @@ class ContentTagsServiceImplTest {
         when(iterator.hasNext()).thenReturn(true, true, true, true, false);
         when(iterator.nextProperty()).thenReturn(properties.get(0), properties.subList(1, 4).toArray(new Property[0]));
         when(node.getProperties()).thenReturn(iterator);
+        return node;
+    }
+
+    @Test
+    void aCallNamesTheSiteOfTheNodeAndAsksForAJsonArray() throws Exception {
+        JCRNodeWrapper article = inSite(node("news", "Jahia ships a vision tier"), "digitall");
+        answer("[\"jahia\"]");
+
+        service.generateTags(article, "English", "en", 1);
+
+        CompletionRequest request = sent();
+        assertEquals(Optional.of("digitall"), request.site());
+        assertEquals(ResponseFormat.JSON, request.responseFormat());
+        assertEquals(Optional.of(ContentTagsServiceImpl.TAGS_SCHEMA), request.jsonSchema());
+        assertTrue(request.instructions().isEmpty(), "no frame without editorial-frame");
+    }
+
+    @Test
+    void theFrameOfTheSiteInTheTagLanguageIsTheInstructions() throws Exception {
+        JCRNodeWrapper article = inSite(node("news", "Jahia ships a vision tier"), "digitall");
+        service.frame = mock(BrandFrame.class);
+        when(service.frame.instructions("digitall", "fr", "Jahia ships a vision tier")).thenReturn("# Brand frame");
+        answer("[\"jahia\"]");
+
+        service.generateTags(article, "French", "fr", 1);
+
+        assertEquals(Optional.of("# Brand frame"), sent().instructions());
+    }
+
+    @Test
+    void withNoTagLocaleTheFrameIsInTheLanguageOfTheSession() throws Exception {
+        JCRNodeWrapper article = inSite(node("news", "Jahia ships a vision tier"), "digitall");
+        JCRSessionWrapper session = mock(JCRSessionWrapper.class);
+        when(session.getLocale()).thenReturn(Locale.GERMAN);
+        when(article.getSession()).thenReturn(session);
+        service.frame = mock(BrandFrame.class);
+        when(service.frame.instructions(eq("digitall"), eq("de"), any())).thenReturn("");
+        answer("[\"jahia\"]");
+
+        service.generateTags(article, "German", null, 1);
+
+        verify(service.frame).instructions(eq("digitall"), eq("de"), any());
+        assertTrue(sent().instructions().isEmpty(), "an empty frame adds no instructions");
+    }
+
+    @Test
+    void anAnswerThatIsNotAJsonArrayGivesNoTags() {
+        assertTrue(TagResponseParser.parse("jahia, cms", 5).isEmpty());
+        assertEquals(List.of("jahia", "cms"), TagResponseParser.parse("[\"jahia\", \"cms\", \"jahia\"]", 5));
+    }
+
+    /** The node, in the site of key {@code siteKey}. */
+    static JCRNodeWrapper inSite(JCRNodeWrapper node, String siteKey) throws Exception {
+        JCRSiteNode site = mock(JCRSiteNode.class);
+        when(site.getPath()).thenReturn("/sites/" + siteKey);
+        when(site.getSiteKey()).thenReturn(siteKey);
+        when(node.getResolveSite()).thenReturn(site);
         return node;
     }
 

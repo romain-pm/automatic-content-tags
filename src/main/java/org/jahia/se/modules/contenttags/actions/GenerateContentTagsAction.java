@@ -2,6 +2,7 @@ package org.jahia.se.modules.contenttags.actions;
 
 import org.jahia.bin.Action;
 import org.jahia.bin.ActionResult;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiNotConfiguredException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
@@ -28,9 +29,11 @@ import java.util.Map;
  * Render action called by the Content Editor dialog to generate tags for the current node.
  *
  * <p>Endpoint: {@code POST /cms/editframe/default/{lang}{path}.generateContentTagsAction.do}
- * with a required {@code tagLanguage} parameter and an optional {@code numberOfTags} parameter.
- * Requires an authenticated user with write permission on the target node; the node is read
- * through the caller's session.</p>
+ * with a required {@code tagLanguage} parameter, the name of the language that the prompt states, and the
+ * optional parameters {@code tagLocale}, the code of that language, which selects the editorial frame, and
+ * {@code numberOfTags}. Requires an authenticated user with write permission on the target node; the node is
+ * read through the caller's session. genai-connector also requires the permission {@code genaiAccess} on the
+ * site of the node.</p>
  */
 @Component(service = Action.class, immediate = true)
 public class GenerateContentTagsAction extends Action {
@@ -63,15 +66,20 @@ public class GenerateContentTagsAction extends Action {
             return new ActionResult(HttpServletResponse.SC_BAD_REQUEST, null, error);
         }
 
-        return tags(resource.getNode(), tagLanguage, parseInt(getParameter(parameters, "numberOfTags")));
+        return tags(resource.getNode(), tagLanguage, getParameter(parameters, "tagLocale"),
+                parseInt(getParameter(parameters, "numberOfTags")));
     }
 
     /** The tags of the node, or the error to show in the dialog. Package-private for the unit tests. */
-    ActionResult tags(JCRNodeWrapper node, String tagLanguage, int numberOfTags) throws Exception {
+    ActionResult tags(JCRNodeWrapper node, String tagLanguage, String tagLocale, int numberOfTags) throws Exception {
         try {
-            List<String> tags = contentTagsService.generateTags(node, tagLanguage, numberOfTags);
+            List<String> tags = contentTagsService.generateTags(node, tagLanguage, tagLocale, numberOfTags);
             JSONObject result = new JSONObject().put("tags", new JSONArray(tags));
             return new ActionResult(HttpServletResponse.SC_OK, null, result);
+        } catch (GenAiAccessDeniedException e) {
+            LOGGER.info("Tag generation refused for node {}: {}", node.getPath(), e.getMessage());
+            JSONObject error = new JSONObject().put("error", "You may not use AI on this site");
+            return new ActionResult(HttpServletResponse.SC_FORBIDDEN, null, error);
         } catch (GenAiNotConfiguredException e) {
             LOGGER.warn("Tag generation is not available: {}", e.getMessage());
             JSONObject error = new JSONObject().put("error",

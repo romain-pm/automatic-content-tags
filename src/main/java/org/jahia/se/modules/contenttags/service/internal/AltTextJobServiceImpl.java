@@ -1,6 +1,7 @@
 package org.jahia.se.modules.contenttags.service.internal;
 
 import org.jahia.api.Constants;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiNotConfiguredException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
@@ -58,6 +59,10 @@ import java.util.function.LongSupplier;
  * <p>An image that a job cannot find gets one more try, a minute later: in a cluster, the processing node that
  * runs the jobs can see an upload of another node a few seconds late.</p>
  *
+ * <p>genai-connector refuses a call when the user of the run does not hold the permission {@code genaiAccess} on the
+ * site of the image. The run then stops for that site, with one log line, and makes no call for its other images.
+ * The images of another site go on.</p>
+ *
  * <p>The component is also registered under its own class, so that the job, which Quartz creates from its class
  * name, can reach it.</p>
  */
@@ -81,6 +86,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
     static final String OVERWRITE = "overwrite";
     static final String RETRIES = "retries";
     static final String MISSING_RETRY = "missingRetry";
+    static final String DENIED_SITES = "deniedSites";
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AltTextJobServiceImpl.class);
 
@@ -130,7 +136,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
             return new AltTextRun(null, identifiers.size(), codes);
         }
         Work work = new Work(UUID.randomUUID().toString().substring(0, 8), user.getUserKey(), identifiers, codes,
-                codes, overwrite, 0, false);
+                codes, overwrite, 0, false, List.of());
         JobDetail job = work.toJob();
         try {
             scheduleIn(job, START_DELAY_SECONDS);
@@ -170,17 +176,24 @@ public class AltTextJobServiceImpl implements AltTextJobService {
         Map<AltTextResult.Status, Integer> counts = new EnumMap<>(AltTextResult.Status.class);
         List<String> missing = new ArrayList<>();
         int done = 0;
+        // The images of a refused site take no model call, so they do not count in the batch.
+        int processed = 0;
         try {
             // The first image always runs, so that every job moves the run forward.
-            while (done < identifiers.size() && done < BATCH_SIZE
+            while (done < identifiers.size() && processed < BATCH_SIZE
                     && (done == 0 || nanoTime.getAsLong() - deadline < 0)) {
                 String identifier = identifiers.get(done);
                 List<String> languages = done == 0 ? work.firstLanguages() : work.languages();
+                boolean refused = false;
                 for (int k = 0; k < languages.size(); k++) {
                     String language = languages.get(k);
                     try {
-                        AltTextResult result = altTextService.fillImage(imageIn(identifier, language),
-                                work.overwrite());
+                        JCRNodeWrapper image = imageIn(identifier, language);
+                        if (!work.deniedSites().isEmpty() && work.deniedSites().contains(RequestSite.of(image))) {
+                            refused = true;
+                            break;
+                        }
+                        AltTextResult result = altTextService.fillImage(image, work.overwrite());
                         counts.merge(result.status(), 1, Integer::sum);
                         LOGGER.debug("Alternative text run {}: {} in {} {}{}", work.run(), result.path(), language,
                                 result.status(), result.message() == null ? "" : " (" + result.message() + ")");
@@ -189,6 +202,12 @@ public class AltTextJobServiceImpl implements AltTextJobService {
                             missing.add(identifier);
                         }
                         LOGGER.debug("Alternative text run {}: no image {}", work.run(), identifier);
+                        break;
+                    } catch (GenAiAccessDeniedException e) {
+                        work = work.deny(e.site());
+                        LOGGER.info("Alternative text run {} stops for the site {}: {}. Its other images get no text "
+                                + "in this run.", work.run(), e.site(), e.getMessage());
+                        refused = true;
                         break;
                     } catch (GenAiQuotaExceededException | GenAiProviderException e) {
                         int inARow = counts.containsKey(AltTextResult.Status.GENERATED) ? 1 : work.retries() + 1;
@@ -208,6 +227,9 @@ public class AltTextJobServiceImpl implements AltTextJobService {
                     }
                 }
                 done++;
+                if (!refused) {
+                    processed++;
+                }
             }
             log(work, counts);
             if (done < identifiers.size()) {
@@ -224,15 +246,16 @@ public class AltTextJobServiceImpl implements AltTextJobService {
     private void scheduleMissing(Work work, List<String> missing) {
         if (!missing.isEmpty()) {
             scheduleQuietly(new Work(work.run(), work.userKey(), missing, work.languages(), work.languages(),
-                    work.overwrite(), 0, true).toJob(), MISSING_DELAY_SECONDS);
+                    work.overwrite(), 0, true, work.deniedSites()).toJob(), MISSING_DELAY_SECONDS);
         }
     }
 
     private static void log(Work work, Map<AltTextResult.Status, Integer> counts) {
-        LOGGER.info("Alternative text run {} in {}: {} generated, {} skipped, {} failed", work.run(),
+        LOGGER.info("Alternative text run {} in {}: {} generated, {} skipped, {} failed{}", work.run(),
                 work.languages(), counts.getOrDefault(AltTextResult.Status.GENERATED, 0),
                 counts.getOrDefault(AltTextResult.Status.SKIPPED, 0),
-                counts.getOrDefault(AltTextResult.Status.FAILED, 0));
+                counts.getOrDefault(AltTextResult.Status.FAILED, 0),
+                work.deniedSites().isEmpty() ? "" : ", no AI access on the sites " + work.deniedSites());
     }
 
     private void retryLater(Work rest, Exception cause) {
@@ -319,25 +342,40 @@ public class AltTextJobServiceImpl implements AltTextJobService {
      * @param overwrite      whether to replace any existing text
      * @param retries        the attempts in a row that wrote nothing
      * @param missingRetry   whether this job tries again the images that an earlier job could not find
+     * @param deniedSites    the sites on which genai-connector refused a call of the run
      */
     record Work(String run, String userKey, List<String> identifiers, List<String> languages,
-                List<String> firstLanguages, boolean overwrite, int retries, boolean missingRetry) {
+                List<String> firstLanguages, boolean overwrite, int retries, boolean missingRetry,
+                List<String> deniedSites) {
 
         @SuppressWarnings("unchecked")
         static Work of(JobDataMap data) {
             List<String> languages = List.copyOf((List<String>) data.get(LANGUAGES));
             List<String> first = (List<String>) data.get(FIRST_LANGUAGES);
+            List<String> denied = (List<String>) data.get(DENIED_SITES);
             return new Work(data.getString(RUN), data.getString(BackgroundJob.JOB_USERKEY),
                     List.copyOf((List<String>) data.get(IDENTIFIERS)), languages,
                     first == null ? languages : List.copyOf(first), data.getBoolean(OVERWRITE),
                     data.containsKey(RETRIES) ? data.getInt(RETRIES) : 0,
-                    data.containsKey(MISSING_RETRY) && data.getBoolean(MISSING_RETRY));
+                    data.containsKey(MISSING_RETRY) && data.getBoolean(MISSING_RETRY),
+                    denied == null ? List.of() : List.copyOf(denied));
         }
 
         /** The same run, on the images and the languages left. */
         Work rest(List<String> identifiersLeft, List<String> firstLanguagesLeft, int retriesInARow) {
             return new Work(run, userKey, identifiersLeft, languages, firstLanguagesLeft, overwrite, retriesInARow,
-                    missingRetry);
+                    missingRetry, deniedSites);
+        }
+
+        /** The same run, which makes no more call for the images of {@code site}. */
+        Work deny(String site) {
+            if (site == null || deniedSites.contains(site)) {
+                return this;
+            }
+            List<String> denied = new ArrayList<>(deniedSites);
+            denied.add(site);
+            return new Work(run, userKey, identifiers, languages, firstLanguages, overwrite, retries, missingRetry,
+                    List.copyOf(denied));
         }
 
         /**
@@ -360,6 +398,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
             data.put(OVERWRITE, overwrite);
             data.put(RETRIES, retries);
             data.put(MISSING_RETRY, missingRetry);
+            data.put(DENIED_SITES, new ArrayList<>(deniedSites));
             job.setJobDataMap(data);
             return job;
         }

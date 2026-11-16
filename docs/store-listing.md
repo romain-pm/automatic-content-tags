@@ -33,7 +33,8 @@ It is built to Jahia's security and integration standards: the action is POST-on
 - **Alternative text of images** at upload, in background jobs that survive a restart and wait when the AI provider is busy.
 - **Alternative text for existing images** through the GraphQL mutation `scheduleImageAltText`, for one image or every image below a path.
 - **Provenance of each AI text**: the model, the date and a reviewed flag. A replaced image gets a new text, unless an editor wrote, changed or reviewed the current one.
-- **One AI configuration** in genai-connector: provider, model, key, rate limit and audit log.
+- **One AI configuration** in genai-connector: provider, model, key, access check per site, rate limit and audit log.
+- **Brand frame**: with the module editorial-frame, the tags and the alternative text follow the voice, the writing rules and the glossary of their site.
 - **Pick the tag language** at generation time, independently of the content language.
 - **Choose how many tags** (up to the configured maximum) and whether to **replace** the existing tags or **add to** them, right in the dialog.
 - Tags are written to Jahia's standard tagging field (`j:tagList`), so they work with existing facets, queries and tag-based navigation.
@@ -45,6 +46,8 @@ It is built to Jahia's security and integration standards: the action is POST-on
 
 - Jahia 8.2.2 or later.
 - genai-connector, with a model for the `lite` tier, and a model that accepts images for the `vision` tier. The alternative text and the tags of an image use `vision`. Model usage is billed by the provider configured in genai-connector.
+- The permission `genaiAccess` on the site, for each editor who generates tags or alternative text. genai-connector grants it to its editorial roles.
+- Optional: the module editorial-frame, for the brand frame.
 
 ## Installation
 
@@ -75,11 +78,15 @@ Two features send content, at two different times:
 
 - Tags: when you click Apply, the module sends the internationalized text of the content item, with HTML stripped and truncated to `llm.max.source.chars`. For an image, it also sends the picture and the file name.
 - Alternative text: after each upload, the module sends the picture, its file name and its title, unless `alt.generate.on.upload` is false. A GraphQL mutation sends the same data for the images it names.
+- With the module editorial-frame, each call also sends the published editorial frame of the site. The frame holds the voice of the brand, its writing rules and its glossary terms.
 
 The module stores the AI answers and their provenance on the content. It stores no other copy of your content.
 
 **Which content types can be tagged?**
 Standard content, pages, main-resource content and images (`jnt:content`, `jnt:page`, `jmix:mainResource`, `jmix:image`). The action is hidden on other node types and on sites where the module is not enabled.
+
+**Who may generate tags or alternative text?**
+An editor who holds the permission `genaiAccess` on the site. genai-connector checks the permission on each call, before it sends anything to the provider. An editor without the permission sees "You may not use AI on this site". A background job of that editor makes no call for that site.
 
 **Does it tag unsaved changes?**
 No. Tags are generated from the last saved version of the content. Save your edits first, then run Auto Tagging.

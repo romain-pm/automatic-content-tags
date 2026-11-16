@@ -45,6 +45,21 @@
             <version>0.1.0-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
+        <!-- The editorial frame of a site, optional: without the module editorial-frame, the bridge component
+             does not start, and the alternative text and the tags go without a frame. Its main branch publishes
+             this SNAPSHOT to the Jahia Nexus. -->
+        <dependency>
+            <groupId>org.jahia.pm.modules</groupId>
+            <artifactId>editorial-frame</artifactId>
+            <version>0.1.0-SNAPSHOT</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
         <dependency>
             <groupId>org.jahia.modules</groupId>
             <artifactId>graphql-dxm-provider</artifactId>
@@ -89,7 +104,7 @@
         <tag>HEAD</tag>
     </scm>
     <properties>
-        <jahia-depends>default,genai-connector,graphql-dxm-provider</jahia-depends>
+        <jahia-depends>default,genai-connector,graphql-dxm-provider,editorial-frame=optional</jahia-depends>
         <yarn.arguments>build:production</yarn.arguments>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
@@ -157,9 +172,10 @@
                 <extensions>true</extensions>
                 <configuration>
                     <instructions>
-                        <Jahia-Depends>default,genai-connector,graphql-dxm-provider</Jahia-Depends>
+                        <Jahia-Depends>default,genai-connector,graphql-dxm-provider,editorial-frame=optional</Jahia-Depends>
                         <Jahia-Static-Resources>/css,/fonts,/javascript,/icons,/img</Jahia-Static-Resources>
                         <_dsannotations>*</_dsannotations>
+                        <Import-Package>org.jahia.pm.modules.editorialframe.api;resolution:=optional,*</Import-Package>
                     </instructions>
                 </configuration>
             </plugin>
