@@ -5,6 +5,8 @@ import org.jahia.modules.genai.api.CompletionResult;
 import org.jahia.modules.genai.api.GenAiService;
 import org.jahia.modules.genai.api.ImageInput;
 import org.jahia.modules.genai.api.ModelTier;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
+import org.jahia.se.modules.contenttags.service.AltTextService;
 import org.jahia.se.modules.contenttags.service.ContentTagsService;
 import org.jahia.se.modules.contenttags.service.TagTarget;
 import org.jahia.services.content.JCRNodeWrapper;
@@ -14,6 +16,9 @@ import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Modified;
 import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.component.annotations.ReferenceCardinality;
+import org.osgi.service.component.annotations.ReferencePolicy;
+import org.osgi.service.component.annotations.ReferencePolicyOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,8 +29,10 @@ import javax.jcr.RepositoryException;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Default {@link ContentTagsService} implementation.
@@ -36,6 +43,11 @@ import java.util.Optional;
  * on the tier {@code vision}, so its tags describe what it shows. The operator chooses the provider,
  * the model and the key of each tier in the ai-assistant configuration, never here.</p>
  *
+ * <p>Each call names the site of the node, which ai-assistant checks against the permission
+ * {@code genaiAccess} of the caller, and asks for a JSON array of strings, which ai-assistant checks.
+ * When the module content-governance runs, the frame of that site in the tag language is the instructions of
+ * the call: the voice of the brand, its writing rules and its glossary terms.</p>
+ *
  * <p>Configuration is bound to PID {@code org.jahia.se.modules.contenttags}; the parsed snapshot is
  * held in an immutable {@link Config} record swapped atomically, so concurrent calls are safe.</p>
  */
@@ -44,10 +56,14 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ContentTagsServiceImpl.class);
 
-    // Style-only guidance; the tag count and language are injected authoritatively by the service.
-    private static final String DEFAULT_PROMPT =
-            "Respond ONLY with a JSON array of concise single- or two-word strings, "
-                    + "without markdown, explanations or duplicates.";
+    // Style-only guidance; the tag count and language are injected authoritatively by the service, and
+    // ai-assistant asks for the JSON array of TAGS_SCHEMA.
+    private static final String DEFAULT_PROMPT = "Write concise tags of one or two words, with no duplicates.";
+    /** The answer of a tag call: a JSON array of strings, which ai-assistant checks. */
+    static final String TAGS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}";
+    /** The line after the editorial frame: the frame changes the words of the tags, never what the rules set. */
+    static final String FRAME_FORM = "The brand frame above guides the words and the terms of the tags, never their "
+            + "number, their language or their form: give the tags alone, with no explanation.";
     private static final int DEFAULT_MAX_TOKENS = 1024;
     private static final int DEFAULT_MAX_SOURCE_CHARS = 6000;
     private static final int DEFAULT_TAG_COUNT = 5;
@@ -55,12 +71,19 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     private static final int MIN_TAG_COUNT = 1;
     // Hard safety ceiling for the configurable maximum, to protect the token budget.
     private static final int ABSOLUTE_MAX_TAG_COUNT = 50;
+    // The mixins of the AI alternative text and of its provenance: AI output never feeds the tags.
+    private static final Set<String> AI_TEXT_MIXINS = Set.of(AltTextService.DEFAULT_ALT_MIXIN, AltTextProvenance.MIXIN);
     static final String DEFAULT_TAG_PROPERTY = "j:tagList";
     static final String DEFAULT_TAG_MIXIN = "jmix:tagged";
 
     // Package-private for the unit tests, which inject a mock.
     @Reference
     GenAiService genAi;
+
+    // Optional: without the module content-governance, no frame applies. Package-private for the unit tests.
+    @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
+            policyOption = ReferencePolicyOption.GREEDY)
+    volatile BrandFrame frame;
 
     private volatile Config config = Config.from(ConfigValues.of(Map.of()));
 
@@ -92,11 +115,11 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     }
 
     @Override
-    public List<String> generateTags(JCRNodeWrapper node, String tagLanguage, int numberOfTags) {
+    public List<String> generateTags(JCRNodeWrapper node, String tagLanguage, String tagLocale, int numberOfTags) {
         Config cfg = config;
         int count = clampCount(numberOfTags, cfg.tagCountDefault(), cfg.tagCountMax());
 
-        String text = extractText(node, cfg.maxSourceChars());
+        String text = extractText(node, cfg.maxSourceChars(), cfg.altProperty());
         Optional<ImageInput> picture = picture(node, cfg);
         if (text.isEmpty() && picture.isEmpty()) {
             LOGGER.debug("No internationalized text and no image found on node {}", node.getPath());
@@ -105,16 +128,20 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
         // The count and language are authoritative here, so the configurable prompt only has to
         // carry style guidance (and must not hardcode a number).
-        String ask = "Generate exactly " + count + " relevant tags, in " + tagLanguage;
+        String rules = "Generate exactly " + count + " relevant tags, in " + tagLanguage + ". " + cfg.prompt();
+        String site = site(node);
         CompletionRequest.Builder request = CompletionRequest.builder()
+                .site(site)
+                .instructions(instructions(rules, frameText(site, frameLanguage(node, tagLocale), text)))
+                .jsonSchema(TAGS_SCHEMA)
                 .maxOutputTokens(cfg.maxTokens())
                 .temperature(cfg.temperature());
         if (picture.isPresent()) {
-            String prompt = ask + ", for this image. " + cfg.prompt() + " Its file name is \"" + node.getName() + "\"."
+            String prompt = "Tag this image. Its file name is \"" + node.getName() + "\"."
                     + (text.isEmpty() ? "" : " Its text: " + text);
             request.tier(ModelTier.VISION).input(prompt).images(List.of(picture.get()));
         } else {
-            request.tier(cfg.tier()).input(ask + ", for the following content. " + cfg.prompt() + " Content: " + text);
+            request.tier(cfg.tier()).input("Tag the following content. Content: " + text);
         }
         CompletionRequest built = request.build();
         LOGGER.debug("Requesting {} tags on tier '{}' for node {}", count, built.tier().id(), node.getPath());
@@ -122,6 +149,45 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         List<String> tags = TagResponseParser.parse(result.text(), count);
         LOGGER.debug("Model {} returned {} tags for node {}", result.model(), tags.size(), node.getPath());
         return tags;
+    }
+
+    /** The site of the node. A site that cannot be read fails the call, because a call with no site skips the check. */
+    private static String site(JCRNodeWrapper node) {
+        try {
+            return RequestSite.of(node);
+        } catch (RepositoryException e) {
+            throw new IllegalStateException("Unable to read the site of " + node.getPath(), e);
+        }
+    }
+
+    /**
+     * The tag language code of the request, else the language of the session that read the node; {@code null}, and
+     * so no frame, when neither is known.
+     */
+    private static String frameLanguage(JCRNodeWrapper node, String tagLocale) {
+        if (tagLocale != null && !tagLocale.isBlank()) {
+            return tagLocale.trim();
+        }
+        try {
+            Locale locale = node.getSession() == null ? null : node.getSession().getLocale();
+            return locale == null ? null : locale.toString();
+        } catch (RepositoryException e) {
+            return null;
+        }
+    }
+
+    /** The instructions of the call: the rules of the tags, then the frame of the site and the line on its form. */
+    static String instructions(String rules, String frameText) {
+        if (frameText == null || frameText.isEmpty()) {
+            return rules;
+        }
+        return rules + "\n\n" + frameText.strip() + "\n\n" + FRAME_FORM;
+    }
+
+    /** The frame of the site in the tag language, or an empty text without content-governance. */
+    private String frameText(String site, String language, String text) {
+        BrandFrame current = frame;
+        return current == null || language == null ? "" : current.instructions(site, language, text);
     }
 
     @Override
@@ -179,18 +245,22 @@ public class ContentTagsServiceImpl implements ContentTagsService {
 
     /**
      * Collects the internationalized, single-valued string properties of the node and
-     * strips any HTML markup.
+     * strips any HTML markup. The properties of the AI alternative text and its provenance are left out, so that AI
+     * output never feeds the tags, and so is the alternative text property of an image ({@code alt.property}).
      */
-    private String extractText(JCRNodeWrapper node, int maxSourceChars) {
+    private String extractText(JCRNodeWrapper node, int maxSourceChars, String altProperty) {
         StringBuilder builder = new StringBuilder();
         try {
+            // A property such as jcr:description holds the alternative text on an image only.
+            String imageAltProperty = node.isNodeType("jmix:image") ? altProperty : null;
             PropertyIterator iterator = node.getProperties();
             while (iterator.hasNext()) {
                 Property property = iterator.nextProperty();
                 if (property.getDefinition() instanceof ExtendedPropertyDefinition definition
                         && definition.isInternationalized()
                         && !definition.isMultiple()
-                        && definition.getRequiredType() == PropertyType.STRING) {
+                        && definition.getRequiredType() == PropertyType.STRING
+                        && !isAiText(definition, imageAltProperty)) {
                     builder.append(property.getValue().getString()).append(' ');
                 }
             }
@@ -206,11 +276,17 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         return text;
     }
 
+    private static boolean isAiText(ExtendedPropertyDefinition definition, String altProperty) {
+        return definition.getName() != null && definition.getName().equals(altProperty)
+                || definition.getDeclaringNodeType() != null
+                && AI_TEXT_MIXINS.contains(definition.getDeclaringNodeType().getName());
+    }
+
     /**
      * Immutable configuration snapshot.
      */
     record Config(TargetProperty tagTarget, ModelTier tier, String prompt, int maxTokens, Double temperature,
-                  int maxSourceChars, int maxImageBytes, int tagCountDefault, int tagCountMax) {
+                  int maxSourceChars, int maxImageBytes, int tagCountDefault, int tagCountMax, String altProperty) {
 
         static Config from(ConfigValues values) {
             // Configurable ceiling, bounded by the absolute safety max; the default count can never exceed it.
@@ -226,7 +302,8 @@ public class ContentTagsServiceImpl implements ContentTagsService {
                     values.integer("llm.max.source.chars", DEFAULT_MAX_SOURCE_CHARS, 1, Integer.MAX_VALUE),
                     ImagePayload.maxBytes(values),
                     values.integer("llm.tag.count.default", DEFAULT_TAG_COUNT, MIN_TAG_COUNT, tagCountMax),
-                    tagCountMax);
+                    tagCountMax,
+                    values.string("alt.property", AltTextService.DEFAULT_ALT_PROPERTY));
         }
     }
 }

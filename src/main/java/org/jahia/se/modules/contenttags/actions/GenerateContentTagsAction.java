@@ -2,6 +2,8 @@ package org.jahia.se.modules.contenttags.actions;
 
 import org.jahia.bin.Action;
 import org.jahia.bin.ActionResult;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
+import org.jahia.modules.genai.api.GenAiInvalidOutputException;
 import org.jahia.modules.genai.api.GenAiNotConfiguredException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
@@ -28,14 +30,19 @@ import java.util.Map;
  * Render action called by the Content Editor dialog to generate tags for the current node.
  *
  * <p>Endpoint: {@code POST /cms/editframe/default/{lang}{path}.generateContentTagsAction.do}
- * with a required {@code tagLanguage} parameter and an optional {@code numberOfTags} parameter.
- * Requires an authenticated user with write permission on the target node; the node is read
- * through the caller's session.</p>
+ * with a required {@code tagLanguage} parameter, the name of the language that the prompt states, and the
+ * optional parameters {@code tagLocale}, the code of that language, which selects the editorial frame, and
+ * {@code numberOfTags}. Requires an authenticated user with write permission on the target node; the node is
+ * read through the caller's session. ai-assistant also requires the permission {@code genaiAccess} on the
+ * site of the node.</p>
  */
 @Component(service = Action.class, immediate = true)
 public class GenerateContentTagsAction extends Action {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GenerateContentTagsAction.class);
+
+    /** The code of the JSON body of a 403 that ai-assistant refused, which the dialog reads. */
+    static final String GENAI_ACCESS = "genaiAccess";
 
     private ContentTagsService contentTagsService;
 
@@ -63,15 +70,22 @@ public class GenerateContentTagsAction extends Action {
             return new ActionResult(HttpServletResponse.SC_BAD_REQUEST, null, error);
         }
 
-        return tags(resource.getNode(), tagLanguage, parseInt(getParameter(parameters, "numberOfTags")));
+        return tags(resource.getNode(), tagLanguage, getParameter(parameters, "tagLocale"),
+                parseInt(getParameter(parameters, "numberOfTags")));
     }
 
     /** The tags of the node, or the error to show in the dialog. Package-private for the unit tests. */
-    ActionResult tags(JCRNodeWrapper node, String tagLanguage, int numberOfTags) throws Exception {
+    ActionResult tags(JCRNodeWrapper node, String tagLanguage, String tagLocale, int numberOfTags) throws Exception {
         try {
-            List<String> tags = contentTagsService.generateTags(node, tagLanguage, numberOfTags);
+            List<String> tags = contentTagsService.generateTags(node, tagLanguage, tagLocale, numberOfTags);
             JSONObject result = new JSONObject().put("tags", new JSONArray(tags));
             return new ActionResult(HttpServletResponse.SC_OK, null, result);
+        } catch (GenAiAccessDeniedException e) {
+            LOGGER.info("Tag generation refused for node {}: {}", node.getPath(), e.getMessage());
+            // The code tells this refusal from the other 403 of Jahia, such as a missing write permission.
+            JSONObject error = new JSONObject().put("error", "You may not use AI on this site")
+                    .put("code", GENAI_ACCESS);
+            return new ActionResult(HttpServletResponse.SC_FORBIDDEN, null, error);
         } catch (GenAiNotConfiguredException e) {
             LOGGER.warn("Tag generation is not available: {}", e.getMessage());
             JSONObject error = new JSONObject().put("error",
@@ -80,6 +94,11 @@ public class GenerateContentTagsAction extends Action {
         } catch (GenAiQuotaExceededException e) {
             JSONObject error = new JSONObject().put("error", "Too many AI requests, try again later");
             return new ActionResult(429, null, error);
+        } catch (GenAiInvalidOutputException e) {
+            // ai-assistant already retried: the model keeps answering with no JSON array of tags.
+            LOGGER.warn("The model gave no JSON array of tags for node {}: {}", node.getPath(), e.getMessage());
+            JSONObject error = new JSONObject().put("error", "The AI model gave no tags, try again");
+            return new ActionResult(HttpServletResponse.SC_BAD_GATEWAY, null, error);
         } catch (GenAiProviderException e) {
             if (!e.isRetryable()) {
                 return failed(node, e);

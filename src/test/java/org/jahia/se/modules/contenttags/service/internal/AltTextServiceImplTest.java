@@ -2,6 +2,7 @@ package org.jahia.se.modules.contenttags.service.internal;
 
 import org.jahia.modules.genai.api.CompletionRequest;
 import org.jahia.modules.genai.api.CompletionResult;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiNotConfiguredException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
@@ -9,6 +10,7 @@ import org.jahia.modules.genai.api.GenAiService;
 import org.jahia.modules.genai.api.ModelTier;
 import org.jahia.modules.genai.api.StopReason;
 import org.jahia.modules.genai.api.Usage;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
 import org.jahia.se.modules.contenttags.service.AltTextReport;
 import org.jahia.se.modules.contenttags.service.AltTextResult;
 import org.jahia.se.modules.contenttags.service.AltTextResult.Status;
@@ -17,6 +19,7 @@ import org.jahia.services.content.JCRNodeIteratorWrapper;
 import org.jahia.services.content.JCRNodeWrapper;
 import org.jahia.services.content.JCRPropertyWrapper;
 import org.jahia.services.content.JCRSessionWrapper;
+import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.content.nodetypes.ExtendedPropertyDefinition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -98,8 +101,68 @@ class AltTextServiceImplTest {
 
         service.fillAltText(image, false, false, null);
 
-        verify(image, never()).addMixin(anyString());
+        verify(image, never()).addMixin(AltTextService.DEFAULT_ALT_MIXIN);
+        verify(image).addMixin(AltTextProvenance.MIXIN);
         verify(image).setProperty("jcr:description", "A grey cat.");
+    }
+
+    @Test
+    void aTextRecordsItsProvenanceAsNotReviewed() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", null, true);
+        answer("A grey cat.");
+
+        String pictureDigest = AltTextProvenance.digest(new byte[] {1, 2, 3});
+
+        AltTextResult result = service.fillImage(image, false);
+
+        assertEquals(Status.GENERATED, result.status());
+        verify(image).addMixin(AltTextProvenance.MIXIN);
+        verify(image).setProperty(AltTextProvenance.MODEL, "m");
+        verify(image).setProperty(AltTextProvenance.TIER, ModelTier.LITE.id());
+        verify(image).setProperty(AltTextProvenance.REVIEWED, false);
+        verify(image).setProperty(AltTextProvenance.DIGEST, AltTextProvenance.digest("A grey cat."));
+        verify(image).setProperty(AltTextProvenance.SOURCE, pictureDigest);
+        verify(session).save();
+    }
+
+    @Test
+    void theAiTextOfAReplacedImageIsReplaced() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", "A black dog.", true);
+        provenance(image, "A black dog.", null, "digest of the former file");
+        answer("A grey cat.");
+
+        assertEquals(Status.GENERATED, service.fillImage(image, false).status());
+        verify(image).setProperty(AltTextService.DEFAULT_ALT_PROPERTY, "A grey cat.");
+    }
+
+    @Test
+    void theAiTextOfTheSameImageIsKept() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", "A grey cat.", true);
+        provenance(image, "A grey cat.", false, AltTextProvenance.digest(new byte[] {1, 2, 3}));
+
+        assertEquals(Status.SKIPPED, service.fillImage(image, false).status());
+        verify(genAi, never()).complete(any());
+    }
+
+    @Test
+    void anAiTextThatAnEditorReviewedOrChangedIsKeptWhenTheImageIsReplaced() throws Exception {
+        JCRNodeWrapper reviewed = image("/sites/s/files/cat.png", "A black dog.", true);
+        provenance(reviewed, "A black dog.", true, "digest of the former file");
+        JCRNodeWrapper changed = image("/sites/s/files/dog.png", "A black dog, edited.", true);
+        provenance(changed, "A black dog.", null, "digest of the former file");
+
+        assertEquals(Status.SKIPPED, service.fillImage(reviewed, false).status());
+        assertEquals(Status.SKIPPED, service.fillImage(changed, false).status());
+        verify(genAi, never()).complete(any());
+    }
+
+    @Test
+    void aNodeThatIsNotAnImageFailsWithoutAModelCall() throws Exception {
+        JCRNodeWrapper file = image("/sites/s/files/doc.pdf", null, true);
+        when(file.isNodeType("jmix:image")).thenReturn(false);
+
+        assertEquals(Status.FAILED, service.fillImage(file, false).status());
+        verify(genAi, never()).complete(any());
     }
 
     @Test
@@ -372,6 +435,87 @@ class AltTextServiceImplTest {
     }
 
     @Test
+    void aCallNamesTheSiteOfTheImageAndTheFrameFollowsTheInstructions() throws Exception {
+        JCRNodeWrapper image = inSite(image("/sites/digitall/files/cat.png", null, true), "digitall");
+        service.frame = mock(BrandFrame.class);
+        when(service.frame.instructions(eq("digitall"), eq("fr"), any())).thenReturn("# Brand frame\nWrite Jahia.\n");
+        answer("Un chat gris.");
+
+        service.fillAltText(image, false, false, null);
+
+        CompletionRequest request = sent();
+        assertEquals(Optional.of("digitall"), request.site());
+        assertEquals(Optional.of(AltTextServiceImpl.DEFAULT_INSTRUCTIONS + "\n\n# Brand frame\nWrite Jahia.\n\n"
+                + AltTextServiceImpl.FRAME_FORM), request.instructions());
+    }
+
+    @Test
+    void withoutEditorialFrameTheInstructionsAreThoseOfTheModule() throws Exception {
+        JCRNodeWrapper image = inSite(image("/sites/digitall/files/cat.png", null, true), "digitall");
+        answer("A grey cat.");
+
+        service.fillAltText(image, false, false, null);
+
+        assertEquals(Optional.of(AltTextServiceImpl.DEFAULT_INSTRUCTIONS), sent().instructions());
+    }
+
+    @Test
+    void anImageOutsideSitesNamesNoSite() throws Exception {
+        // Jahia resolves a file of a user to systemsite, which is not its site.
+        JCRNodeWrapper image = inSite(image("/users/editor/files/cat.png", null, true), "systemsite");
+        answer("A grey cat.");
+
+        service.fillAltText(image, false, false, null);
+
+        assertTrue(sent().site().isEmpty());
+    }
+
+    @Test
+    void aRefusedSiteFailsItsImagesWithOneCallAndTheOtherSitesGoOn() throws Exception {
+        JCRNodeWrapper folder = folder("/sites",
+                inSite(image("/sites/s/files/a.png", null, true), "s"),
+                inSite(image("/sites/s/files/b.png", null, true), "s"),
+                inSite(image("/sites/t/files/c.png", null, true), "t"));
+        when(genAi.complete(any())).thenAnswer(invocation -> {
+            CompletionRequest request = invocation.getArgument(0);
+            if (request.site().equals(Optional.of("s"))) {
+                throw new GenAiAccessDeniedException("s", "The permission 'genaiAccess' is required on the site 's'");
+            }
+            return result("A photo.");
+        });
+
+        AltTextReport report = service.fillAltText(folder, true, false, null);
+
+        assertEquals(2, report.count(Status.FAILED));
+        assertEquals(1, report.count(Status.GENERATED));
+        assertEquals("You may not use AI on the site s", report.images().get(1).message());
+        assertFalse(report.truncated());
+        verify(genAi, times(2)).complete(any());
+    }
+
+    @Test
+    void aRefusedSiteIsAnErrorOfOneImage() throws Exception {
+        JCRNodeWrapper image = image("/sites/s/files/cat.png", null, true);
+        when(genAi.complete(any())).thenThrow(new GenAiAccessDeniedException("s", "refused"));
+
+        assertThrows(GenAiAccessDeniedException.class, () -> service.fillImage(image, false));
+    }
+
+    private CompletionRequest sent() {
+        ArgumentCaptor<CompletionRequest> request = ArgumentCaptor.forClass(CompletionRequest.class);
+        verify(genAi).complete(request.capture());
+        return request.getValue();
+    }
+
+    private static JCRNodeWrapper inSite(JCRNodeWrapper node, String siteKey) throws Exception {
+        JCRSiteNode site = mock(JCRSiteNode.class);
+        when(site.getPath()).thenReturn("/sites/" + siteKey);
+        when(site.getSiteKey()).thenReturn(siteKey);
+        when(node.getResolveSite()).thenReturn(site);
+        return node;
+    }
+
+    @Test
     void aConnectorWithoutModelIsAnErrorOfTheCall() throws Exception {
         JCRNodeWrapper image = image("/sites/s/files/cat.png", null, true);
         when(genAi.complete(any())).thenThrow(new GenAiNotConfiguredException("no lite tier"));
@@ -409,6 +553,29 @@ class AltTextServiceImplTest {
         }
         ImagePayloadTest.resource(image, "jcr:content", "image/png", new byte[] {1, 2, 3});
         return image;
+    }
+
+    /** Marks {@code text} as written by the AI on {@code image}; a null flag or source leaves the property out. */
+    private static void provenance(JCRNodeWrapper image, String text, Boolean reviewed, String source)
+            throws Exception {
+        when(image.isNodeType(AltTextProvenance.MIXIN)).thenReturn(true);
+        property(image, AltTextProvenance.DIGEST, AltTextProvenance.digest(text));
+        if (reviewed != null) {
+            JCRPropertyWrapper flag = mock(JCRPropertyWrapper.class);
+            when(flag.getBoolean()).thenReturn(reviewed);
+            when(image.hasProperty(AltTextProvenance.REVIEWED)).thenReturn(true);
+            when(image.getProperty(AltTextProvenance.REVIEWED)).thenReturn(flag);
+        }
+        if (source != null) {
+            property(image, AltTextProvenance.SOURCE, source);
+        }
+    }
+
+    private static void property(JCRNodeWrapper node, String name, String value) throws Exception {
+        JCRPropertyWrapper property = mock(JCRPropertyWrapper.class);
+        when(property.getString()).thenReturn(value);
+        when(node.hasProperty(name)).thenReturn(true);
+        when(node.getProperty(name)).thenReturn(property);
     }
 
     private JCRNodeWrapper folder(String path, JCRNodeWrapper... images) throws Exception {

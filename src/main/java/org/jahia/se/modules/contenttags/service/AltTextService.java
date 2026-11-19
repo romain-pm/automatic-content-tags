@@ -9,7 +9,10 @@ import javax.jcr.RepositoryException;
  * {@value #DEFAULT_ALT_PROPERTY}), with a vision model reached through ai-assistant.
  *
  * <p>Every read and every write goes through the session of the node that the caller passes, so the
- * permissions of the calling user apply. The text is written in the locale of that session.</p>
+ * permissions of the calling user apply. The text is written in the locale of that session. Each model call names
+ * the site of the image, and ai-assistant refuses it when the calling user does not hold the permission
+ * {@code genaiAccess} on that site. When the module content-governance runs, the instructions of the call carry the
+ * frame of that site in the locale of the session.</p>
  */
 public interface AltTextService {
 
@@ -29,10 +32,12 @@ public interface AltTextService {
      * <p>The configured property must be a single-valued string declared by the image's types or by the
      * configured mixin; otherwise the image fails before any model call. An image that already has a value
      * in that property, in the session locale for an i18n property, is skipped unless
-     * {@code overwrite} is true. Each image is saved on its own, so the images done before a failure
+     * {@code overwrite} is true, or the value is an AI text that {@link #fillImage} would replace. Each image is
+     * saved on its own, so the images done before a failure
      * keep their text. The images are visited in path order. An invocation makes at most
      * {@link #getMaxImages()} model calls, and makes no new call once it has run for {@code alt.max.seconds};
-     * the report then names the image to resume from.</p>
+     * the report then names the image to resume from. When ai-assistant refuses a call for its site, the image
+     * fails, and the other images of that site fail with no call; the images of another site go on.</p>
      *
      * @param node            the image or the folder, read through the calling user's session in the
      *                        target locale
@@ -47,6 +52,29 @@ public interface AltTextService {
      */
     AltTextReport fillAltText(JCRNodeWrapper node, boolean includeSubNodes, boolean overwrite, String resumeFrom)
             throws RepositoryException;
+
+    /**
+     * Generates and saves the alternative text of one image, in the locale of its session, with no image or time
+     * limit. A background job calls it for each image and each language.
+     *
+     * <p>Without {@code overwrite}, an image keeps its text, unless that text is the AI's own text, which no editor
+     * changed or marked as reviewed, and the picture sent to the model changed since. Each text written records its
+     * provenance in the mixin {@code jmix:jahiaAltProvenance}.</p>
+     *
+     * @param image     the image, read through the calling user's session in the target locale
+     * @param overwrite whether to replace any existing alternative text
+     * @return what happened to the image
+     * @throws org.jahia.modules.genai.api.GenAiAccessDeniedException  when the calling user does not hold the
+     *                                                                   permission {@code genaiAccess} on the site
+     *                                                                   of the image
+     * @throws org.jahia.modules.genai.api.GenAiQuotaExceededException at the rate limit of ai-assistant
+     * @throws org.jahia.modules.genai.api.GenAiProviderException       when the provider is busy or unavailable,
+     *                                                                   after the retries of ai-assistant
+     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException  when ai-assistant has no model for the
+     *                                                                   tier {@code vision}
+     * @throws RepositoryException when the image cannot be read
+     */
+    AltTextResult fillImage(JCRNodeWrapper image, boolean overwrite) throws RepositoryException;
 
     /** @return the most images that one invocation sends to the model ({@code alt.max.images}) */
     int getMaxImages();

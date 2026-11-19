@@ -2,6 +2,7 @@ package org.jahia.se.modules.contenttags.service.internal;
 
 import org.jahia.modules.genai.api.CompletionRequest;
 import org.jahia.modules.genai.api.CompletionResult;
+import org.jahia.modules.genai.api.GenAiAccessDeniedException;
 import org.jahia.modules.genai.api.GenAiProviderException;
 import org.jahia.modules.genai.api.GenAiQuotaExceededException;
 import org.jahia.modules.genai.api.GenAiService;
@@ -9,6 +10,7 @@ import org.jahia.modules.genai.api.ImageInput;
 import org.jahia.modules.genai.api.ModelTier;
 import org.jahia.se.modules.contenttags.service.AltTextReport;
 import org.jahia.se.modules.contenttags.service.AltTextResult;
+import org.jahia.se.modules.contenttags.frame.BrandFrame;
 import org.jahia.se.modules.contenttags.service.AltTextService;
 import org.jahia.services.content.JCRContentUtils;
 import org.jahia.services.content.JCRNodeWrapper;
@@ -17,6 +19,9 @@ import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Modified;
 import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.component.annotations.ReferenceCardinality;
+import org.osgi.service.component.annotations.ReferencePolicy;
+import org.osgi.service.component.annotations.ReferencePolicyOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,11 +32,13 @@ import javax.jcr.RepositoryException;
 import javax.jcr.query.Query;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
@@ -41,9 +48,13 @@ import java.util.function.LongSupplier;
  *
  * <p>For each image it sends one rendition of the picture, with a short instruction, to the model of
  * the ai-assistant tier {@code vision}, cleans the answer and saves it in the property of
- * {@code alt.property} (default {@code jahia_ai_alt}), in the locale of the caller's session. It never opens a system session: an image the caller cannot
- * read is not listed, and an image the caller cannot edit is reported as failed before any model
- * call.</p>
+ * {@code alt.property} (default {@code jahia_ai_alt}), in the locale of the caller's session, with its provenance
+ * ({@link AltTextProvenance}). It never opens a system session: an image the caller cannot read is not listed, and
+ * an image the caller cannot edit is reported as failed before any model call.</p>
+ *
+ * <p>Each call names the site of the image, which ai-assistant checks against the permission {@code genaiAccess}
+ * of the caller. When the module content-governance runs, the frame of that site in the language of the text follows
+ * the instructions: the voice of the brand, its writing rules and its glossary terms.</p>
  */
 @Component(service = AltTextService.class, configurationPid = ConfigValues.PID, immediate = true)
 public class AltTextServiceImpl implements AltTextService {
@@ -55,11 +66,20 @@ public class AltTextServiceImpl implements AltTextService {
             + "matters to understand it, in one short sentence. Do not start with \"Image of\", \"Picture of\" or "
             + "\"Photo of\". Do not use quotes, markdown or emoji. Reply with the alternative text only.";
 
+    /** The line after the editorial frame: the frame changes the words of the text, never its form. */
+    static final String FRAME_FORM = "The brand frame above guides the words and the terms of the alternative text, "
+            + "never its form: reply with the alternative text alone, with no explanation, no note and no placeholder.";
+
     private static final String WRITE_PERMISSION = "jcr:write_default";
 
     // Package-private for the unit tests, which inject a mock.
     @Reference
     GenAiService genAi;
+
+    // Optional: without the module content-governance, no frame applies. Package-private for the unit tests.
+    @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
+            policyOption = ReferencePolicyOption.GREEDY)
+    volatile BrandFrame frame;
 
     // Package-private for the unit tests, which move the clock.
     LongSupplier nanoTime = System::nanoTime;
@@ -88,18 +108,17 @@ public class AltTextServiceImpl implements AltTextService {
         if (resumeFrom != null) {
             images = images.tailMap(resumeFrom, true);
         }
+        // The sites on which ai-assistant refused a call: their other images take no call.
+        Set<String> refused = new HashSet<>();
         for (JCRNodeWrapper listed : images.values()) {
             String path = listed.getPath();
             try {
-                JCRNodeWrapper image = listed;
-                Prepared prepared;
-                try {
-                    prepared = prepare(image, overwrite, cfg);
-                } catch (InvalidItemStateException e) {
-                    // A stale read before the model call: check the fresh copy once more.
-                    image = reload(image);
-                    prepared = prepare(image, overwrite, cfg);
+                String site = refused.isEmpty() ? null : RequestSite.of(listed);
+                if (site != null && refused.contains(site)) {
+                    results.add(refusedOn(path, site));
+                    continue;
                 }
+                Prepared prepared = prepareFresh(listed, overwrite, cfg);
                 if (prepared.result() != null) {
                     results.add(prepared.result());
                     continue;
@@ -109,7 +128,13 @@ public class AltTextServiceImpl implements AltTextService {
                     return new AltTextReport(results, path);
                 }
                 modelCalls++;
-                results.add(generate(image, prepared, overwrite, cfg));
+                results.add(generate(prepared, overwrite, cfg));
+            } catch (GenAiAccessDeniedException e) {
+                if (refused.add(e.site())) {
+                    LOGGER.info("The alternative text stops for the site {}, from {}: {}", e.site(), path,
+                            e.getMessage());
+                }
+                results.add(refusedOn(path, e.site()));
             } catch (GenAiQuotaExceededException e) {
                 results.add(new AltTextResult(path, AltTextResult.Status.FAILED, null,
                         "The AI rate limit is reached, try again later"));
@@ -127,6 +152,26 @@ public class AltTextServiceImpl implements AltTextService {
             }
         }
         return new AltTextReport(results, null);
+    }
+
+    @Override
+    public AltTextResult fillImage(JCRNodeWrapper image, boolean overwrite) throws RepositoryException {
+        Config cfg = config;
+        Prepared prepared = prepareFresh(image, overwrite, cfg);
+        return prepared.result() != null ? prepared.result() : generate(prepared, overwrite, cfg);
+    }
+
+    /** {@link #prepare}, once more on a fresh copy of the image after a stale read. */
+    private Prepared prepareFresh(JCRNodeWrapper image, boolean overwrite, Config cfg) throws RepositoryException {
+        try {
+            return prepare(image, overwrite, cfg);
+        } catch (InvalidItemStateException e) {
+            return prepare(reload(image), overwrite, cfg);
+        }
+    }
+
+    private static AltTextResult refusedOn(String path, String site) {
+        return new AltTextResult(path, AltTextResult.Status.FAILED, null, "You may not use AI on the site " + site);
     }
 
     private static AltTextResult skipped(String path, String existing) {
@@ -153,7 +198,7 @@ public class AltTextServiceImpl implements AltTextService {
      * The node itself when it is an image, then the images below it when asked, by path. The path order is the
      * same on every invocation, so a later invocation can resume where an earlier one stopped.
      */
-    private static NavigableMap<String, JCRNodeWrapper> images(JCRNodeWrapper node, boolean includeSubNodes)
+    static NavigableMap<String, JCRNodeWrapper> images(JCRNodeWrapper node, boolean includeSubNodes)
             throws RepositoryException {
         NavigableMap<String, JCRNodeWrapper> images = new TreeMap<>();
         if (node.isNodeType("jmix:image")) {
@@ -191,20 +236,28 @@ public class AltTextServiceImpl implements AltTextService {
 
     /**
      * What one image needs before its model call: either the result that ends its turn without a call
-     * ({@code result} set), or its current text, picture and prompt.
+     * ({@code result} set), or the image as read, its current text, picture, prompt and picture digest.
      */
-    private record Prepared(AltTextResult result, String existing, ImageInput picture, String prompt) {
+    private record Prepared(AltTextResult result, JCRNodeWrapper image, String existing, ImageInput picture,
+                            String prompt, String source) {
 
         static Prepared done(AltTextResult result) {
-            return new Prepared(result, null, null, null);
+            return new Prepared(result, null, null, null, null, null);
         }
     }
 
-    /** Every read and every check of the image that comes before its model call. */
+    /**
+     * Every read and every check of the image that comes before its model call. Without {@code overwrite}, an
+     * existing text is kept unless it is the AI's unreviewed text of another picture.
+     */
     private Prepared prepare(JCRNodeWrapper image, boolean overwrite, Config cfg) throws RepositoryException {
         String path = image.getPath();
+        if (!image.isNodeType("jmix:image")) {
+            return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, null, "The node is not an image"));
+        }
         String existing = existingAltText(image, cfg);
-        if (existing != null && !overwrite) {
+        boolean keepExisting = existing != null && !overwrite;
+        if (keepExisting && !AltTextProvenance.isUnreviewedAiText(image, existing)) {
             return Prepared.done(skipped(path, existing));
         }
         if (!image.hasPermission(WRITE_PERMISSION)) {
@@ -228,18 +281,26 @@ public class AltTextServiceImpl implements AltTextService {
             return Prepared.done(new AltTextResult(path, AltTextResult.Status.FAILED, existing,
                     "The image has no JPEG, PNG, GIF or WebP rendition of at most " + cfg.maxImageBytes() + " bytes"));
         }
-        return new Prepared(null, existing, payload.get(), prompt(image, cfg));
+        String source = AltTextProvenance.digest(payload.get().data());
+        if (keepExisting && source.equals(AltTextProvenance.source(image))) {
+            return Prepared.done(new AltTextResult(path, AltTextResult.Status.SKIPPED, existing,
+                    "The AI alternative text already describes this image"));
+        }
+        return new Prepared(null, image, existing, payload.get(), prompt(image, cfg), source);
     }
 
-    private AltTextResult generate(JCRNodeWrapper image, Prepared prepared, boolean overwrite, Config cfg)
-            throws RepositoryException {
+    private AltTextResult generate(Prepared prepared, boolean overwrite, Config cfg) throws RepositoryException {
+        JCRNodeWrapper image = prepared.image();
         String path = image.getPath();
         String existing = prepared.existing();
+        String site = RequestSite.of(image);
+        Locale locale = image.getSession().getLocale();
         CompletionResult result;
         try {
             result = genAi.complete(CompletionRequest.builder()
                     .tier(ModelTier.VISION)
-                    .instructions(cfg.instructions())
+                    .site(site)
+                    .instructions(instructions(cfg.instructions(), frameText(site, locale, prepared.prompt())))
                     .input(prepared.prompt())
                     .images(List.of(prepared.picture()))
                     .maxOutputTokens(cfg.maxTokens())
@@ -263,6 +324,7 @@ public class AltTextServiceImpl implements AltTextService {
                 image.addMixin(mixin);
             }
             image.setProperty(cfg.target().property(), altText);
+            AltTextProvenance.write(image, altText, result, prepared.source());
             image.getSession().save();
         } catch (AccessDeniedException e) {
             image.getSession().refresh(false);
@@ -286,6 +348,20 @@ public class AltTextServiceImpl implements AltTextService {
         LOGGER.debug("Saved an alternative text of {} characters on {} (model {})", altText.length(), path,
                 result.model());
         return new AltTextResult(path, AltTextResult.Status.GENERATED, altText, null);
+    }
+
+    /** The frame of the site in the language of the text, or an empty text without content-governance. */
+    private String frameText(String site, Locale locale, String text) {
+        BrandFrame current = frame;
+        return current == null || locale == null ? "" : current.instructions(site, locale.toString(), text);
+    }
+
+    /** The instructions of the call: those of the module, then the frame of the site and the line on its form. */
+    static String instructions(String instructions, String frameText) {
+        if (frameText == null || frameText.isEmpty()) {
+            return instructions;
+        }
+        return instructions + "\n\n" + frameText.strip() + "\n\n" + FRAME_FORM;
     }
 
     /** The user turn: the target language and length, plus the names that can help identify the subject. */
