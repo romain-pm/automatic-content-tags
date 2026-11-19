@@ -38,14 +38,14 @@ import java.util.Set;
  * Default {@link ContentTagsService} implementation.
  *
  * <p>Extracts the internationalized single-valued string properties of a node (read through
- * the calling user's session — no privilege escalation), strips HTML, and asks genai-connector for
+ * the calling user's session — no privilege escalation), strips HTML, and asks ai-assistant for
  * tags on the model tier of {@code llm.tier}. An image ({@code jmix:image}) also sends its picture,
  * on the tier {@code vision}, so its tags describe what it shows. The operator chooses the provider,
- * the model and the key of each tier in the genai-connector configuration, never here.</p>
+ * the model and the key of each tier in the ai-assistant configuration, never here.</p>
  *
- * <p>Each call names the site of the node, which genai-connector checks against the permission
- * {@code genaiAccess} of the caller, and asks for a JSON array of strings, which genai-connector checks.
- * When the module editorial-frame runs, the frame of that site in the tag language is the instructions of
+ * <p>Each call names the site of the node, which ai-assistant checks against the permission
+ * {@code genaiAccess} of the caller, and asks for a JSON array of strings, which ai-assistant checks.
+ * When the module content-governance runs, the frame of that site in the tag language is the instructions of
  * the call: the voice of the brand, its writing rules and its glossary terms.</p>
  *
  * <p>Configuration is bound to PID {@code org.jahia.se.modules.contenttags}; the parsed snapshot is
@@ -57,9 +57,9 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     private static final Logger LOGGER = LoggerFactory.getLogger(ContentTagsServiceImpl.class);
 
     // Style-only guidance; the tag count and language are injected authoritatively by the service, and
-    // genai-connector asks for the JSON array of TAGS_SCHEMA.
+    // ai-assistant asks for the JSON array of TAGS_SCHEMA.
     private static final String DEFAULT_PROMPT = "Write concise tags of one or two words, with no duplicates.";
-    /** The answer of a tag call: a JSON array of strings, which genai-connector checks. */
+    /** The answer of a tag call: a JSON array of strings, which ai-assistant checks. */
     static final String TAGS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}";
     /** The line after the editorial frame: the frame changes the words of the tags, never what the rules set. */
     static final String FRAME_FORM = "The brand frame above guides the words and the terms of the tags, never their "
@@ -80,7 +80,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     @Reference
     GenAiService genAi;
 
-    // Optional: without the module editorial-frame, no frame applies. Package-private for the unit tests.
+    // Optional: without the module content-governance, no frame applies. Package-private for the unit tests.
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
             policyOption = ReferencePolicyOption.GREEDY)
     volatile BrandFrame frame;
@@ -94,9 +94,9 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         List<String> legacy = legacyKeys(properties);
         if (!legacy.isEmpty()) {
             LOGGER.warn("Automatic Content Tags ignores the 1.x provider keys {}: configure the provider, the model "
-                    + "and the API key in genai-connector (org.jahia.modules.genai.cfg), then remove these keys", legacy);
+                    + "and the API key in ai-assistant (org.jahia.modules.genai.cfg), then remove these keys", legacy);
         }
-        LOGGER.info("Automatic Content Tags configured: tags in {}, on the genai-connector tier '{}' ({}), and on "
+        LOGGER.info("Automatic Content Tags configured: tags in {}, on the ai-assistant tier '{}' ({}), and on "
                         + "'{}' for an image ({})", config.tagTarget(), config.tier().id(),
                 genAi.isAvailable(config.tier()) ? "available" : "not configured yet", ModelTier.VISION.id(),
                 genAi.isAvailable(ModelTier.VISION) ? "available" : "not configured yet");
@@ -184,7 +184,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         return rules + "\n\n" + frameText.strip() + "\n\n" + FRAME_FORM;
     }
 
-    /** The frame of the site in the tag language, or an empty text without editorial-frame. */
+    /** The frame of the site in the tag language, or an empty text without content-governance. */
     private String frameText(String site, String language, String text) {
         BrandFrame current = frame;
         return current == null || language == null ? "" : current.instructions(site, language, text);

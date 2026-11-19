@@ -80,7 +80,7 @@ public final class AltTextMutationExtension {
         } catch (PathNotFoundException e) {
             throw new GqlJcrWrongInputException("No node at " + path + " that the current user can read", e);
         } catch (GenAiNotConfiguredException e) {
-            throw new DataFetchingException("Alternative text is not available: genai-connector has no model "
+            throw new DataFetchingException("Alternative text is not available: ai-assistant has no model "
                     + "configured for it");
         } catch (RepositoryException e) {
             throw new DataFetchingException(e);
@@ -90,7 +90,7 @@ public final class AltTextMutationExtension {
     @GraphQLField
     @GraphQLName("generateImageAltText")
     @GraphQLDescription("Generates the alternative text of an image, or of the images below a folder, with the "
-            + "vision model of genai-connector, within the request, and saves it in the configured property (by "
+            + "vision model of ai-assistant, within the request, and saves it in the configured property (by "
             + "default the i18n property jahia_ai_alt of the mixin jmix:jahiaAlt) in the edit workspace, with its "
             + "provenance. Each image is saved on its own; nothing is published. A call stops at alt.max.images or "
             + "alt.max.seconds and returns resumeFrom: for a folder, scheduleImageAltText needs no resume.")
@@ -125,7 +125,7 @@ public final class AltTextMutationExtension {
         } catch (PathNotFoundException e) {
             throw new GqlJcrWrongInputException("No node at " + path + " that the current user can read", e);
         } catch (GenAiNotConfiguredException e) {
-            throw new DataFetchingException("Alternative text is not available: genai-connector has no model "
+            throw new DataFetchingException("Alternative text is not available: ai-assistant has no model "
                     + "configured for it");
         } catch (RepositoryException e) {
             throw new DataFetchingException(e);

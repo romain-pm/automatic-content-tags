@@ -8,7 +8,7 @@ import org.quartz.JobExecutionContext;
  * One Jahia background job of an alternative-text run: {@link AltTextJobServiceImpl#runBatch} does the work.
  *
  * <p>{@link BackgroundJob} runs it as the user of the run. Quartz creates it from its class name, so it reaches the
- * module's service through OSGi. While that service is not started, such as during a restart of genai-connector,
+ * module's service through OSGi. While that service is not started, such as during a restart of ai-assistant,
  * the job postpones its work. A job that fires while this module is stopped is lost: Jahia then runs a job that
  * does nothing in its place.</p>
  */

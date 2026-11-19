@@ -33,7 +33,7 @@ import java.util.Map;
  * with a required {@code tagLanguage} parameter, the name of the language that the prompt states, and the
  * optional parameters {@code tagLocale}, the code of that language, which selects the editorial frame, and
  * {@code numberOfTags}. Requires an authenticated user with write permission on the target node; the node is
- * read through the caller's session. genai-connector also requires the permission {@code genaiAccess} on the
+ * read through the caller's session. ai-assistant also requires the permission {@code genaiAccess} on the
  * site of the node.</p>
  */
 @Component(service = Action.class, immediate = true)
@@ -41,7 +41,7 @@ public class GenerateContentTagsAction extends Action {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GenerateContentTagsAction.class);
 
-    /** The code of the JSON body of a 403 that genai-connector refused, which the dialog reads. */
+    /** The code of the JSON body of a 403 that ai-assistant refused, which the dialog reads. */
     static final String GENAI_ACCESS = "genaiAccess";
 
     private ContentTagsService contentTagsService;
@@ -89,13 +89,13 @@ public class GenerateContentTagsAction extends Action {
         } catch (GenAiNotConfiguredException e) {
             LOGGER.warn("Tag generation is not available: {}", e.getMessage());
             JSONObject error = new JSONObject().put("error",
-                    "Tag generation is not available: genai-connector has no model configured for it");
+                    "Tag generation is not available: ai-assistant has no model configured for it");
             return new ActionResult(HttpServletResponse.SC_SERVICE_UNAVAILABLE, null, error);
         } catch (GenAiQuotaExceededException e) {
             JSONObject error = new JSONObject().put("error", "Too many AI requests, try again later");
             return new ActionResult(429, null, error);
         } catch (GenAiInvalidOutputException e) {
-            // genai-connector already retried: the model keeps answering with no JSON array of tags.
+            // ai-assistant already retried: the model keeps answering with no JSON array of tags.
             LOGGER.warn("The model gave no JSON array of tags for node {}: {}", node.getPath(), e.getMessage());
             JSONObject error = new JSONObject().put("error", "The AI model gave no tags, try again");
             return new ActionResult(HttpServletResponse.SC_BAD_GATEWAY, null, error);

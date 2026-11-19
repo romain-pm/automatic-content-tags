@@ -7,19 +7,19 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Generates content tags for a JCR node through genai-connector.
+ * Generates content tags for a JCR node through ai-assistant.
  */
 public interface ContentTagsService {
 
     /**
      * Extracts the internationalized text of the given node, sends it to the model of the configured
-     * genai-connector tier and returns the suggested tags. An image also sends its picture, on the
+     * ai-assistant tier and returns the suggested tags. An image also sends its picture, on the
      * tier {@code vision}.
      *
      * <p>The node must come from the calling user's session so that read permissions are
      * enforced — implementations never escalate to a system session. The call names the site of
      * the node, and the editorial frame of that site in the tag language applies when the module
-     * editorial-frame runs.</p>
+     * content-governance runs.</p>
      *
      * @param node         the content node, in the locale whose text should be analysed
      * @param tagLanguage  the language the tags should be generated in (display name or ISO code)
@@ -31,10 +31,10 @@ public interface ContentTagsService {
      *         has no text and no picture
      * @throws org.jahia.modules.genai.api.GenAiAccessDeniedException when the calling user does not
      *         hold the permission {@code genaiAccess} on the site of the node
-     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException when genai-connector has no
+     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException when ai-assistant has no
      *         model for the tier of the call ({@code llm.tier}, or {@code vision} for an image)
      * @throws org.jahia.modules.genai.api.GenAiQuotaExceededException when the calling user has
-     *         reached the rate limit of genai-connector
+     *         reached the rate limit of ai-assistant
      * @throws org.jahia.modules.genai.api.GenAiProviderException when the provider call fails
      */
     List<String> generateTags(JCRNodeWrapper node, String tagLanguage, String tagLocale, int numberOfTags);

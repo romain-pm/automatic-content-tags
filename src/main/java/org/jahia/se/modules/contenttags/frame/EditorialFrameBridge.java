@@ -9,10 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The bridge to the module editorial-frame, and the only class that reads its API. Its reference is mandatory, so
+ * The bridge to the module content-governance, and the only class that reads its API. Its reference is mandatory, so
  * it starts only when that module runs. The alternative text and the tags reference {@link BrandFrame} as optional.
  *
- * <p>It asks for the default persona and the default token budget of editorial-frame. A frame that cannot be read
+ * <p>It asks for the default persona and the default token budget of content-governance. A frame that cannot be read
  * gives an empty text: the call then goes without a frame, and never fails because of it.</p>
  */
 @Component(service = BrandFrame.class, immediate = true)

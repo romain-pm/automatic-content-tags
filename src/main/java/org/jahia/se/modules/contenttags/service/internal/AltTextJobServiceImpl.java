@@ -51,7 +51,7 @@ import java.util.function.LongSupplier;
  * meanwhile runs between two jobs. The jobs are stored in the database and request recovery, so a run survives a
  * restart. A finished job drops its list of images, so that the job history stays small.</p>
  *
- * <p>The rate limit of genai-connector, or a provider still busy after the retries of genai-connector, stops the
+ * <p>The rate limit of ai-assistant, or a provider still busy after the retries of ai-assistant, stops the
  * job: a new job takes the images left after {@code alt.retry.delay.seconds}, a delay that doubles on each
  * attempt that writes nothing, up to one hour. The run stops after {@value #MAX_RETRIES} such attempts in a row.
  * A new job resumes at the image and the language that failed.</p>
@@ -59,7 +59,7 @@ import java.util.function.LongSupplier;
  * <p>An image that a job cannot find gets one more try, a minute later: in a cluster, the processing node that
  * runs the jobs can see an upload of another node a few seconds late.</p>
  *
- * <p>genai-connector refuses a call when the user of the run does not hold the permission {@code genaiAccess} on the
+ * <p>ai-assistant refuses a call when the user of the run does not hold the permission {@code genaiAccess} on the
  * site of the image. The run then stops for that site, with one log line, and makes no call for its other images.
  * The images of another site go on.</p>
  *
@@ -120,7 +120,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
             throw new RepositoryException("The session of " + node.getPath() + " has no user to run the job as");
         }
         if (!genAi.isAvailable(ModelTier.VISION)) {
-            throw new GenAiNotConfiguredException("genai-connector has no model for the tier " + ModelTier.VISION.id());
+            throw new GenAiNotConfiguredException("ai-assistant has no model for the tier " + ModelTier.VISION.id());
         }
         List<String> codes = languages == null || languages.isEmpty() ? siteLanguages(node) : List.copyOf(languages);
         List<String> identifiers = new ArrayList<>();
@@ -217,7 +217,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
                         scheduleMissing(work, missing);
                         return;
                     } catch (GenAiNotConfiguredException e) {
-                        LOGGER.info("Alternative text run {} stops: genai-connector has no model for it ({}); {} "
+                        LOGGER.info("Alternative text run {} stops: ai-assistant has no model for it ({}); {} "
                                 + "images left", work.run(), e.getMessage(), identifiers.size() - done);
                         return;
                     } catch (RepositoryException | RuntimeException e) {
@@ -271,7 +271,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
     }
 
     /**
-     * Postpones a job that found no service, such as while genai-connector or this module restarts. {@link AltTextJob}
+     * Postpones a job that found no service, such as while ai-assistant or this module restarts. {@link AltTextJob}
      * calls it, when no instance of this class is registered.
      */
     static void postpone(JobDataMap data) {
@@ -342,7 +342,7 @@ public class AltTextJobServiceImpl implements AltTextJobService {
      * @param overwrite      whether to replace any existing text
      * @param retries        the attempts in a row that wrote nothing
      * @param missingRetry   whether this job tries again the images that an earlier job could not find
-     * @param deniedSites    the sites on which genai-connector refused a call of the run
+     * @param deniedSites    the sites on which ai-assistant refused a call of the run
      */
     record Work(String run, String userKey, List<String> identifiers, List<String> languages,
                 List<String> firstLanguages, boolean overwrite, int retries, boolean missingRetry,

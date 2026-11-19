@@ -11,7 +11,7 @@ import java.util.List;
 /**
  * Reads the tags out of the answer of a tag call.
  *
- * <p>The call sends {@link ContentTagsServiceImpl#TAGS_SCHEMA}, so genai-connector returns one JSON array, with no
+ * <p>The call sends {@link ContentTagsServiceImpl#TAGS_SCHEMA}, so ai-assistant returns one JSON array, with no
  * Markdown fence and no prose around it, or throws. Only the array is read.</p>
  */
 final class TagResponseParser {

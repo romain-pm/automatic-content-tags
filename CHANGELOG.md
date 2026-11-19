@@ -22,7 +22,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   once. A run works through its images in jobs of about 20 seconds each, as the user who scheduled
   it, so that publications keep their turn on the scheduler thread. Its jobs are stored in the
   database, so a run survives a restart.
-- A run waits and goes on when the AI provider is busy or the rate limit of genai-connector is
+- A run waits and goes on when the AI provider is busy or the rate limit of ai-assistant is
   reached: configuration key `alt.retry.delay.seconds` (default 60), doubled on each attempt that
   writes nothing, up to one hour. An image stopped by the rate limit at upload now gets its text later.
 - Provenance of the AI alternative text: the mixin `jmix:jahiaAltProvenance` records, in each
@@ -31,8 +31,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A replaced image gets a new alternative text when its current text is the AI's own text, which no
   editor changed or marked as reviewed. A text that an editor wrote, changed or reviewed is kept.
 - Configuration keys `alt.max.length`, `alt.max.images`, `alt.max.seconds`, `alt.max.tokens`, `alt.temperature` and `alt.prompt`. `llm.temperature` now applies to the tags only.
-- The alternative text and the tags of an image use the genai-connector tier `vision`, whose model
-  reads images. The operator chooses that model in genai-connector, so this module has no tier key
+- The alternative text and the tags of an image use the ai-assistant tier `vision`, whose model
+  reads images. The operator chooses that model in ai-assistant, so this module has no tier key
   for images.
 - Tags of an image: the Auto Tagging action now shows on images (`jmix:image`), and the model sees
   the picture with the file name and the text of the image. An image with no rendition the model
@@ -43,35 +43,37 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `jmix:jahiaAlt`) for the alternative text, `llm.tag.property` and `llm.tag.mixin` (default
   `j:tagList` on `jmix:tagged`) for the tags. Each pair is checked on the node against that exact
   property name; a single-valued tag property receives the tags joined with ", ".
-- Configuration key `llm.tier`, the genai-connector tier of the tags of a content from its text
+- Configuration key `llm.tier`, the ai-assistant tier of the tags of a content from its text
   (default `lite`).
-- Each call names the site of its node. genai-connector refuses a user without the permission
+- Each call names the site of its node. ai-assistant refuses a user without the permission
   `genaiAccess` on that site: the tagging action answers HTTP 403, and the dialog says so. A
   background run of alternative text stops for that site, with one log line, and goes on for the
   images of another site. `generateImageAltText` fails the images of that site, with one call.
-- Brand frame: when the optional module editorial-frame runs, the tags and the alternative text
-  follow the editorial frame of their site. The frame is in the language of the text. It holds the
+- Brand frame: the tags and the alternative text follow the editorial frame of their site, which
+  content-governance holds. The module reads it as an optional dependency. The frame is in the language of the text. It holds the
   voice of the brand, the default persona, the writing rules and the glossary terms of that language.
 - Unit tests (JUnit 5, Mockito).
 
 ### Changed
 - The alternative text and its provenance no longer feed the tags of an image.
-- A tag call asks genai-connector for a JSON array of strings, which genai-connector checks. The
+- A tag call asks ai-assistant for a JSON array of strings, which ai-assistant checks. The
   module no longer reads a comma-separated answer, and the default `llm.user.prompt` holds style
   guidance only.
 - The tag dialog also sends the code of the tag language, `tagLocale`, which selects the frame.
 - The number, the language and the style of the tags are now the instructions of a tag call, and the
-  content is its input. An answer with no JSON array, after the retries of genai-connector, answers
+  content is its input. An answer with no JSON array, after the retries of ai-assistant, answers
   HTTP 502.
 - `generateImageAltText` stays for its callers and still writes within the request. Without
   `overwrite`, it now replaces the AI's own unreviewed text of a replaced image, and it writes the
   provenance. For a folder, `scheduleImageAltText` needs no `resumeFrom`.
-- The module compiles against genai-connector `0.1.0-SNAPSHOT`, which the Jahia Nexus holds, and the
-  standard Jahia workflows build each pull request and publish `main` to the Jahia Nexus.
-- **Breaking**: the module calls its models through genai-connector, which is now a required
-  dependency. The provider, the model and the API key are configured in genai-connector. The keys
-  `llm.provider` and `anthropic.*`, `openai.*`, `deepseek.*` are no longer read.
-- The tagging action answers HTTP 503 when genai-connector has no model for the tier, and HTTP 429
+- The module compiles against ai-assistant `0.1.0-SNAPSHOT` and content-governance
+  `1.12.0-SNAPSHOT`. The standard Jahia workflows build each pull request and publish `main` to the
+  Jahia Nexus.
+- **Breaking**: the module calls its models through ai-assistant, which is now a required
+  dependency. ai-assistant holds the former genai-connector, and needs Jahia 8.2.3.2. The provider,
+  the model and the API key are configured in ai-assistant. The keys `llm.provider` and
+  `anthropic.*`, `openai.*`, `deepseek.*` are no longer read.
+- The tagging action answers HTTP 503 when ai-assistant has no model for the tier, and HTTP 429
   when the user reached its rate limit.
 
 ### Removed

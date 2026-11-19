@@ -6,12 +6,12 @@ import javax.jcr.RepositoryException;
 
 /**
  * Writes the alternative text of images into a configured property ({@code alt.property}, default
- * {@value #DEFAULT_ALT_PROPERTY}), with a vision model reached through genai-connector.
+ * {@value #DEFAULT_ALT_PROPERTY}), with a vision model reached through ai-assistant.
  *
  * <p>Every read and every write goes through the session of the node that the caller passes, so the
  * permissions of the calling user apply. The text is written in the locale of that session. Each model call names
- * the site of the image, and genai-connector refuses it when the calling user does not hold the permission
- * {@code genaiAccess} on that site. When the module editorial-frame runs, the instructions of the call carry the
+ * the site of the image, and ai-assistant refuses it when the calling user does not hold the permission
+ * {@code genaiAccess} on that site. When the module content-governance runs, the instructions of the call carry the
  * frame of that site in the locale of the session.</p>
  */
 public interface AltTextService {
@@ -36,7 +36,7 @@ public interface AltTextService {
      * saved on its own, so the images done before a failure
      * keep their text. The images are visited in path order. An invocation makes at most
      * {@link #getMaxImages()} model calls, and makes no new call once it has run for {@code alt.max.seconds};
-     * the report then names the image to resume from. When genai-connector refuses a call for its site, the image
+     * the report then names the image to resume from. When ai-assistant refuses a call for its site, the image
      * fails, and the other images of that site fail with no call; the images of another site go on.</p>
      *
      * @param node            the image or the folder, read through the calling user's session in the
@@ -46,7 +46,7 @@ public interface AltTextService {
      * @param resumeFrom      the {@link AltTextReport#resumeFrom()} of an earlier invocation, to start at that
      *                        image; {@code null} to start at the first image
      * @return one result per image visited
-     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException when genai-connector has no
+     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException when ai-assistant has no
      *         model for the tier {@code vision}
      * @throws RepositoryException when the images cannot be listed
      */
@@ -67,10 +67,10 @@ public interface AltTextService {
      * @throws org.jahia.modules.genai.api.GenAiAccessDeniedException  when the calling user does not hold the
      *                                                                   permission {@code genaiAccess} on the site
      *                                                                   of the image
-     * @throws org.jahia.modules.genai.api.GenAiQuotaExceededException at the rate limit of genai-connector
+     * @throws org.jahia.modules.genai.api.GenAiQuotaExceededException at the rate limit of ai-assistant
      * @throws org.jahia.modules.genai.api.GenAiProviderException       when the provider is busy or unavailable,
-     *                                                                   after the retries of genai-connector
-     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException  when genai-connector has no model for the
+     *                                                                   after the retries of ai-assistant
+     * @throws org.jahia.modules.genai.api.GenAiNotConfiguredException  when ai-assistant has no model for the
      *                                                                   tier {@code vision}
      * @throws RepositoryException when the image cannot be read
      */
