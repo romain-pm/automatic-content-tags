@@ -82,10 +82,10 @@ src/javascript/                                # React 18 UI extension (Module F
    ```bash
    mvn clean install
    ```
-3. Deploy mcp-server, content-governance and ai-assistant, then
-   `target/automatic-content-tags-<version>.jar`, to your Jahia instance (module management UI or
-   `digital-factory-data/modules`). Uninstall genai-connector and editorial-frame first, because
-   ai-assistant and content-governance export the same packages.
+3. Deploy mcp-server and ai-assistant, and content-governance for the writing rules and the
+   glossary of the frame. Then deploy `target/automatic-content-tags-<version>.jar` to your Jahia
+   instance (module management UI or `digital-factory-data/modules`). Uninstall genai-connector and
+   editorial-frame first, because ai-assistant and content-governance export the same packages.
 4. Configure the model access of ai-assistant (`org.jahia.modules.genai.cfg`): a model for the
    `lite` tier, and a model that reads images for the `vision` tier. For example,
    `vision.model=mistral/mistral-medium-latest` sends the image calls to a larger gateway model.
@@ -130,8 +130,8 @@ from this file.
 
 **Moving from genai-connector and editorial-frame**: ai-assistant reads the same configuration,
 `org.jahia.modules.genai.cfg`, so each tier keeps its model, and it builds the frame that
-editorial-frame built. Uninstall genai-connector and editorial-frame, install content-governance and
-ai-assistant, then install this module.
+editorial-frame built. Uninstall genai-connector and editorial-frame, install ai-assistant, and
+content-governance for the writing rules and the glossary of the frame, then install this module.
 
 **Choosing the model of the images.** Set it in ai-assistant, with `vision.model` or a whole
 `vision.*` connection. This module has no tier key for images. The keys `alt.tier` and

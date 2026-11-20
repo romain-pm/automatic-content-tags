@@ -23,7 +23,7 @@ public interface ContentTagsService {
      *
      * @param node         the content node, in the locale whose text should be analysed
      * @param tagLanguage  the language the tags should be generated in (display name or ISO code)
-     * @param tagLocale    the code of that language, such as {@code fr}, which selects the editorial
+     * @param tagLocale    the code of that language, such as {@code fr}, which selects the brand
      *                     frame; {@code null} for the locale of the node's session
      * @param numberOfTags how many tags to request; values &le; 0 fall back to the configured
      *                     default and the effective count is clamped to a sane range
