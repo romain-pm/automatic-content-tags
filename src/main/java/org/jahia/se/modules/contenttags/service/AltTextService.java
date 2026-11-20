@@ -11,8 +11,8 @@ import javax.jcr.RepositoryException;
  * <p>Every read and every write goes through the session of the node that the caller passes, so the
  * permissions of the calling user apply. The text is written in the locale of that session. Each model call names
  * the site of the image, and ai-assistant refuses it when the calling user does not hold the permission
- * {@code genaiAccess} on that site. When the module content-governance runs, the instructions of the call carry the
- * frame of that site in the locale of the session.</p>
+ * {@code genaiAccess} on that site. When ai-assistant exports its frame API, the instructions of the call carry the
+ * brand frame of that site in the locale of the session.</p>
  */
 public interface AltTextService {
 

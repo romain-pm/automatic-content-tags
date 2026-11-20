@@ -31,7 +31,7 @@ import java.util.Map;
  *
  * <p>Endpoint: {@code POST /cms/editframe/default/{lang}{path}.generateContentTagsAction.do}
  * with a required {@code tagLanguage} parameter, the name of the language that the prompt states, and the
- * optional parameters {@code tagLocale}, the code of that language, which selects the editorial frame, and
+ * optional parameters {@code tagLocale}, the code of that language, which selects the brand frame, and
  * {@code numberOfTags}. Requires an authenticated user with write permission on the target node; the node is
  * read through the caller's session. ai-assistant also requires the permission {@code genaiAccess} on the
  * site of the node.</p>

@@ -1,8 +1,8 @@
 package org.jahia.se.modules.contenttags.frame;
 
-import org.jahia.pm.modules.editorialframe.api.EditorialFrameService;
-import org.jahia.pm.modules.editorialframe.api.FrameContext;
-import org.jahia.pm.modules.editorialframe.api.FrameRequest;
+import org.jahia.modules.aiassistant.frame.api.BrandFrameService;
+import org.jahia.modules.aiassistant.frame.api.FrameContext;
+import org.jahia.modules.aiassistant.frame.api.FrameRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -17,15 +17,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-class EditorialFrameBridgeTest {
+class BrandFrameBridgeTest {
 
-    private EditorialFrameService frames;
-    private EditorialFrameBridge bridge;
+    private BrandFrameService frames;
+    private BrandFrameBridge bridge;
 
     @BeforeEach
     void setUp() {
-        frames = mock(EditorialFrameService.class);
-        bridge = new EditorialFrameBridge(frames);
+        frames = mock(BrandFrameService.class);
+        bridge = new BrandFrameBridge(frames);
     }
 
     @Test

@@ -214,7 +214,8 @@ class ContentTagsServiceImplTest {
         assertEquals(Optional.of(ContentTagsServiceImpl.TAGS_SCHEMA), request.jsonSchema());
         String instructions = request.instructions().orElseThrow();
         assertTrue(instructions.startsWith("Generate exactly 1 relevant tags, in English."), instructions);
-        assertFalse(instructions.contains(ContentTagsServiceImpl.FRAME_FORM), "no frame without content-governance");
+        assertFalse(instructions.contains(ContentTagsServiceImpl.FRAME_FORM),
+                "no frame without the brand frame of ai-assistant");
     }
 
     @Test

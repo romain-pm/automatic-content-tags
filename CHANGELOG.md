@@ -49,8 +49,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `genaiAccess` on that site: the tagging action answers HTTP 403, and the dialog says so. A
   background run of alternative text stops for that site, with one log line, and goes on for the
   images of another site. `generateImageAltText` fails the images of that site, with one call.
-- Brand frame: the tags and the alternative text follow the editorial frame of their site, which
-  content-governance holds. The module reads it as an optional dependency. The frame is in the language of the text. It holds the
+- Brand frame: the tags and the alternative text follow the brand frame of their site, which
+  ai-assistant builds. The module reads it as an optional import of the package
+  `org.jahia.modules.aiassistant.frame.api` 1.x. The frame is in the language of the text. It holds the
   voice of the brand, the default persona, the writing rules and the glossary terms of that language.
 - Unit tests (JUnit 5, Mockito).
 
@@ -66,9 +67,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `generateImageAltText` stays for its callers and still writes within the request. Without
   `overwrite`, it now replaces the AI's own unreviewed text of a replaced image, and it writes the
   provenance. For a folder, `scheduleImageAltText` needs no `resumeFrom`.
-- The module compiles against ai-assistant `0.1.0-SNAPSHOT` and content-governance
-  `1.12.0-SNAPSHOT`. The standard Jahia workflows build each pull request and publish `main` to the
-  Jahia Nexus.
+- The module compiles against ai-assistant `0.1.0-SNAPSHOT`. The standard Jahia workflows build each
+  pull request and publish `main` to the Jahia Nexus.
 - **Breaking**: the module calls its models through ai-assistant, which is now a required
   dependency. ai-assistant holds the former genai-connector, and needs Jahia 8.2.3.2. The provider,
   the model and the API key are configured in ai-assistant. The keys `llm.provider` and
