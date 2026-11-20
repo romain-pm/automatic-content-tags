@@ -34,7 +34,7 @@ It is built to Jahia's security and integration standards: the action is POST-on
 - **Alternative text for existing images** through the GraphQL mutation `scheduleImageAltText`, for one image or every image below a path.
 - **Provenance of each AI text**: the model, the date and a reviewed flag. A replaced image gets a new text, unless an editor wrote, changed or reviewed the current one.
 - **One AI configuration** in ai-assistant: provider, model, key, access check per site, rate limit and audit log.
-- **Brand frame**: the tags and the alternative text follow the voice, the writing rules and the glossary of their site, from the editorial frame of content-governance.
+- **Brand frame**: the tags and the alternative text follow the voice, the writing rules and the glossary of their site, from the brand frame of ai-assistant.
 - **Pick the tag language** at generation time, independently of the content language.
 - **Choose how many tags** (up to the configured maximum) and whether to **replace** the existing tags or **add to** them, right in the dialog.
 - Tags are written to Jahia's standard tagging field (`j:tagList`), so they work with existing facets, queries and tag-based navigation.
@@ -45,9 +45,9 @@ It is built to Jahia's security and integration standards: the action is POST-on
 **Requirements**
 
 - Jahia 8.2.3.2 or later, which ai-assistant requires.
-- ai-assistant, with a model for the `lite` tier, and a model that accepts images for the `vision` tier. The alternative text and the tags of an image use `vision`. Model usage is billed by the provider configured in ai-assistant. ai-assistant requires mcp-server and content-governance.
+- ai-assistant, with a model for the `lite` tier, and a model that accepts images for the `vision` tier. The alternative text and the tags of an image use `vision`. Model usage is billed by the provider configured in ai-assistant. ai-assistant requires mcp-server, and it builds the brand frame.
 - The permission `genaiAccess` on the site, for each editor who generates tags or alternative text. ai-assistant grants it to its editorial roles.
-- content-governance 1.12 or later, for the brand frame. ai-assistant requires it.
+- content-governance, for the writing rules and the glossary of the brand frame. It is optional.
 
 ## Installation
 
@@ -78,7 +78,7 @@ Two features send content, at two different times:
 
 - Tags: when you click Apply, the module sends the internationalized text of the content item, with HTML stripped and truncated to `llm.max.source.chars`. For an image, it also sends the picture and the file name.
 - Alternative text: after each upload, the module sends the picture, its file name and its title, unless `alt.generate.on.upload` is false. A GraphQL mutation sends the same data for the images it names.
-- Each call also sends the published editorial frame of the site, which content-governance holds. The frame holds the voice of the brand, its writing rules and its glossary terms.
+- Each call also sends the published brand frame of the site, which ai-assistant builds. The frame holds the voice of the brand, its writing rules and its glossary terms.
 
 The module stores the AI answers and their provenance on the content. It stores no other copy of your content.
 

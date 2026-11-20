@@ -45,7 +45,7 @@ import java.util.Set;
  *
  * <p>Each call names the site of the node, which ai-assistant checks against the permission
  * {@code genaiAccess} of the caller, and asks for a JSON array of strings, which ai-assistant checks.
- * When the module content-governance runs, the frame of that site in the tag language is the instructions of
+ * When ai-assistant exports its frame API, the brand frame of that site in the tag language is the instructions of
  * the call: the voice of the brand, its writing rules and its glossary terms.</p>
  *
  * <p>Configuration is bound to PID {@code org.jahia.se.modules.contenttags}; the parsed snapshot is
@@ -61,7 +61,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     private static final String DEFAULT_PROMPT = "Write concise tags of one or two words, with no duplicates.";
     /** The answer of a tag call: a JSON array of strings, which ai-assistant checks. */
     static final String TAGS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"string\"}}";
-    /** The line after the editorial frame: the frame changes the words of the tags, never what the rules set. */
+    /** The line after the brand frame: the frame changes the words of the tags, never what the rules set. */
     static final String FRAME_FORM = "The brand frame above guides the words and the terms of the tags, never their "
             + "number, their language or their form: give the tags alone, with no explanation.";
     private static final int DEFAULT_MAX_TOKENS = 1024;
@@ -80,7 +80,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
     @Reference
     GenAiService genAi;
 
-    // Optional: without the module content-governance, no frame applies. Package-private for the unit tests.
+    // Optional: without the frame API of ai-assistant, no frame applies. Package-private for the unit tests.
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
             policyOption = ReferencePolicyOption.GREEDY)
     volatile BrandFrame frame;
@@ -184,7 +184,7 @@ public class ContentTagsServiceImpl implements ContentTagsService {
         return rules + "\n\n" + frameText.strip() + "\n\n" + FRAME_FORM;
     }
 
-    /** The frame of the site in the tag language, or an empty text without content-governance. */
+    /** The frame of the site in the tag language, or an empty text without the frame API of ai-assistant. */
     private String frameText(String site, String language, String text) {
         BrandFrame current = frame;
         return current == null || language == null ? "" : current.instructions(site, language, text);

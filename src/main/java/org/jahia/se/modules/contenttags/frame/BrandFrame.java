@@ -1,11 +1,11 @@
 package org.jahia.se.modules.contenttags.frame;
 
 /**
- * The editorial frame of a site, as a text for the instructions of a model call: the voice of the brand, its
+ * The brand frame of a site, as a text for the instructions of a model call: the voice of the brand, its
  * writing rules and its glossary terms in the language of the text.
  *
- * <p>{@link EditorialFrameBridge} provides it when the module content-governance runs. Without that module, no service
- * of this type runs, and every call goes without a frame, as before.</p>
+ * <p>{@link BrandFrameBridge} provides it when ai-assistant exports its frame API. Without that API, no service of
+ * this type runs, and every call goes without a frame, as before.</p>
  */
 public interface BrandFrame {
 

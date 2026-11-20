@@ -7,7 +7,7 @@ import javax.jcr.RepositoryException;
 
 /**
  * The site of a model call: the key of the site that holds the node, which ai-assistant checks against the
- * permission {@code genaiAccess} of the user, and which selects the editorial frame.
+ * permission {@code genaiAccess} of the user, and which selects the brand frame.
  */
 final class RequestSite {
 

@@ -11,8 +11,8 @@ This module uses AI to write two kinds of metadata in Jahia:
 The module reaches its models through [ai-assistant](https://github.com/Jahia/ai-assistant), which
 holds the former genai-connector. This module holds no provider, model or API key of its own: the
 operator configures them once, in ai-assistant, for the whole platform. Each call also follows the
-editorial frame of its site, which [content-governance](https://github.com/Jahia/content-governance)
-holds. The frame holds the voice of the brand, its rules and its glossary.
+brand frame of its site, which ai-assistant builds. The frame holds the voice of the brand, its rules
+and its glossary.
 
 Runs on Jahia 8.2.3.2 or later, which ai-assistant requires. Requires Java 17 to build.
 
@@ -21,7 +21,7 @@ Runs on Jahia 8.2.3.2 or later, which ai-assistant requires. Requires Java 17 to
 - [ai-assistant](https://github.com/Jahia/ai-assistant) installed and started, with the tier
   `vision`. Each call that sends an image uses `vision`: the alternative text, and the tags of an
   image. The tags of other content use `llm.tier` (`lite` by default). ai-assistant requires
-  mcp-server and content-governance.
+  mcp-server.
 - The model of `vision` must accept images. With no `vision.*` key, ai-assistant uses its shared
   model for `vision`; the shipped `mistral/mistral-small-latest` accepts images. The
   `docs/genai/README.md` of ai-assistant states what each tier needs.
@@ -29,9 +29,11 @@ Runs on Jahia 8.2.3.2 or later, which ai-assistant requires. Requires Java 17 to
   Each call names the site of its node, and ai-assistant refuses a user without that permission
   on that site. ai-assistant grants `genaiAccess` to its editorial roles.
 - `graphql-dxm-provider`, which every Jahia 8.2 ships.
-- [content-governance](https://github.com/Jahia/content-governance) 1.12 or later, for the
-  [brand frame](#brand-frame). ai-assistant requires it, so it always runs. This module reads the
-  frame as an optional dependency, and works without a frame when the frame cannot be read.
+- For the [brand frame](#brand-frame), an ai-assistant that exports the package
+  `org.jahia.modules.aiassistant.frame.api` 1.x, as its branch `ai-assistant-rga` does. This module
+  reads that package as an optional import, and works without a frame when the package or the frame
+  cannot be read. The writing rules and the glossary of the frame come from
+  [content-governance](https://github.com/Jahia/content-governance), when ai-assistant finds it.
 
 ## Features
 
@@ -53,14 +55,14 @@ Runs on Jahia 8.2.3.2 or later, which ai-assistant requires. Requires Java 17 to
 - **One AI configuration**: provider, model and key come from ai-assistant. ai-assistant also
   applies the access check on the site, the per-user rate limit, retries and the audit log.
 - **Brand frame**: the tags and the alternative text follow the voice, the writing rules and the
-  glossary of their site, from the editorial frame of content-governance.
+  glossary of their site, from the brand frame of ai-assistant.
 
 ## Architecture
 
 ```
 src/main/java/org/jahia/se/modules/contenttags/
 ├── actions/                       # POST-only render actions of the tagging dialog (CSRF-whitelisted)
-├── frame/                         # The optional bridge to the editorial frame of content-governance
+├── frame/                         # The optional bridge to the brand frame of ai-assistant
 ├── graphql/                       # Mutations scheduleImageAltText and generateImageAltText, result types
 ├── service/ContentTagsService     # Tag generation
 ├── service/AltTextService         # Alternative text generation
@@ -74,8 +76,8 @@ src/javascript/                                # React 18 UI extension (Module F
 ## Installation
 
 1. Build and install ai-assistant from its branch `ai-assistant-rga` first (`mvn clean install` in
-   its checkout). The Jahia Nexus holds the snapshot of its `main` branch, which lacks the model API.
-   Maven resolves content-governance `1.12.0-SNAPSHOT` from the Jahia public Nexus.
+   its checkout). The Jahia Nexus holds the snapshot of its `main` branch, which lacks the model API
+   and the frame API.
 2. Build the module:
    ```bash
    mvn clean install
@@ -127,8 +129,8 @@ are no longer read. Configure the provider and the key in ai-assistant instead, 
 from this file.
 
 **Moving from genai-connector and editorial-frame**: ai-assistant reads the same configuration,
-`org.jahia.modules.genai.cfg`, so each tier keeps its model. content-governance serves the same
-frame API. Uninstall genai-connector and editorial-frame, install content-governance and
+`org.jahia.modules.genai.cfg`, so each tier keeps its model, and it builds the frame that
+editorial-frame built. Uninstall genai-connector and editorial-frame, install content-governance and
 ai-assistant, then install this module.
 
 **Choosing the model of the images.** Set it in ai-assistant, with `vision.model` or a whole
@@ -274,10 +276,10 @@ also holds the SHA-256 digests of the text and of the picture that the model saw
 
 ### Brand frame
 
-Each call carries the editorial frame of its site, which content-governance holds, after the
-instructions of the module. The frame is in the language of the text that the model writes. For an
-alternative text, it is the language of the text, and for tags, the tag language of the dialog.
-content-governance builds the frame text, within its default budget of 1,500 tokens:
+Each call carries the brand frame of its site after the instructions of the module. The frame is in
+the language of the text that the model writes. For an alternative text, it is the language of the
+text, and for tags, the tag language of the dialog. ai-assistant builds the frame text, within its
+default budget of 1,500 tokens:
 
 - the voice of the brand, for the group and for the site;
 - the default persona of the site, and the names of the others;
@@ -287,7 +289,7 @@ content-governance builds the frame text, within its default budget of 1,500 tok
 For example, a glossary of `digitall` says to write "jeton d'accès" for "access token" in French. A
 French alternative text of a screenshot of the login page then writes "jeton d'accès".
 
-- content-governance reads the live workspace, so a change of the frame applies once it is published.
+- ai-assistant reads the live workspace, so a change of the frame applies once it is published.
 - The frame guides the words and the terms, never the form. A line after the frame keeps the
   alternative text alone, with no note. For the tags, the same line keeps their number, their language
   and their form, and ai-assistant checks that the answer is a JSON array.

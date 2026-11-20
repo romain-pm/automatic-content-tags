@@ -53,8 +53,8 @@ import java.util.function.LongSupplier;
  * an image the caller cannot edit is reported as failed before any model call.</p>
  *
  * <p>Each call names the site of the image, which ai-assistant checks against the permission {@code genaiAccess}
- * of the caller. When the module content-governance runs, the frame of that site in the language of the text follows
- * the instructions: the voice of the brand, its writing rules and its glossary terms.</p>
+ * of the caller. When ai-assistant exports its frame API, the brand frame of that site in the language of the text
+ * follows the instructions: the voice of the brand, its writing rules and its glossary terms.</p>
  */
 @Component(service = AltTextService.class, configurationPid = ConfigValues.PID, immediate = true)
 public class AltTextServiceImpl implements AltTextService {
@@ -66,7 +66,7 @@ public class AltTextServiceImpl implements AltTextService {
             + "matters to understand it, in one short sentence. Do not start with \"Image of\", \"Picture of\" or "
             + "\"Photo of\". Do not use quotes, markdown or emoji. Reply with the alternative text only.";
 
-    /** The line after the editorial frame: the frame changes the words of the text, never its form. */
+    /** The line after the brand frame: the frame changes the words of the text, never its form. */
     static final String FRAME_FORM = "The brand frame above guides the words and the terms of the alternative text, "
             + "never its form: reply with the alternative text alone, with no explanation, no note and no placeholder.";
 
@@ -76,7 +76,7 @@ public class AltTextServiceImpl implements AltTextService {
     @Reference
     GenAiService genAi;
 
-    // Optional: without the module content-governance, no frame applies. Package-private for the unit tests.
+    // Optional: without the frame API of ai-assistant, no frame applies. Package-private for the unit tests.
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC,
             policyOption = ReferencePolicyOption.GREEDY)
     volatile BrandFrame frame;
@@ -350,7 +350,7 @@ public class AltTextServiceImpl implements AltTextService {
         return new AltTextResult(path, AltTextResult.Status.GENERATED, altText, null);
     }
 
-    /** The frame of the site in the language of the text, or an empty text without content-governance. */
+    /** The frame of the site in the language of the text, or an empty text without the frame API of ai-assistant. */
     private String frameText(String site, Locale locale, String text) {
         BrandFrame current = frame;
         return current == null || locale == null ? "" : current.instructions(site, locale.toString(), text);

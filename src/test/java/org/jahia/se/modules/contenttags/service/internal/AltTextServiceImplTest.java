@@ -450,7 +450,7 @@ class AltTextServiceImplTest {
     }
 
     @Test
-    void withoutEditorialFrameTheInstructionsAreThoseOfTheModule() throws Exception {
+    void withoutBrandFrameTheInstructionsAreThoseOfTheModule() throws Exception {
         JCRNodeWrapper image = inSite(image("/sites/digitall/files/cat.png", null, true), "digitall");
         answer("A grey cat.");
 

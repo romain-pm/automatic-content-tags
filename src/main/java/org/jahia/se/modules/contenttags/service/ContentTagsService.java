@@ -18,8 +18,8 @@ public interface ContentTagsService {
      *
      * <p>The node must come from the calling user's session so that read permissions are
      * enforced — implementations never escalate to a system session. The call names the site of
-     * the node, and the editorial frame of that site in the tag language applies when the module
-     * content-governance runs.</p>
+     * the node, and the brand frame of that site in the tag language applies when ai-assistant exports its
+     * frame API.</p>
      *
      * @param node         the content node, in the locale whose text should be analysed
      * @param tagLanguage  the language the tags should be generated in (display name or ISO code)
